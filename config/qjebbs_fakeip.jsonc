@@ -1,0 +1,301 @@
+{
+  "log": {
+    "level": "info",
+    "output": "sing-box.log",
+    "timestamp": true
+  },
+  "dns": {
+    "servers": [
+      {
+        "tag": "cloudflare",
+        "address": "tls://1.1.1.1",
+        "detour": "Proxy"
+      },
+      {
+        "tag": "fakedns",
+        "address": "fakeip"
+      },
+      {
+        "tag": "local",
+        "address": "https://1.12.12.12/dns-query",
+        "detour": "direct"
+      },
+      {
+        "tag": "block",
+        "address": "rcode://success"
+      }
+    ],
+    "rules": [
+      // https://github.com/SagerNet/sing-box/releases/tag/v1.2.2
+      {
+        "outbound": "any",
+        "server": "local",
+        "disable_cache": true
+      },
+      {
+        "clash_mode": "Global",
+        "server": "cloudflare"
+      },
+      {
+        "clash_mode": "Direct",
+        "server": "local"
+      },
+      {
+        "rule_set": [
+//          "block-local",
+          "category-ads-all"
+        ],
+        "server": "block",
+        "disable_cache": true
+      },
+      {
+        "rule_set": [
+//          "direct-local",
+          "apple@cn",
+          "category-games@cn",
+          "private",
+          "cn-domain"
+        ],
+        "server": "local"
+      },
+      {
+        "query_type": [
+          "A",
+          "AAAA"
+        ],
+        "server": "fakedns"
+      }
+    ],
+    "fakeip": {
+      "enabled": true,
+      "inet4_range": "198.18.0.0/15",
+      "inet6_range": "fc00::/18"
+    },
+    "independent_cache": true,
+    "strategy": "prefer_ipv4"
+  },
+  "inbounds": [
+    {
+      "type": "mixed",
+      "tag": "mixed-in",
+      "listen": "::",
+      "listen_port": 1080,
+      "sniff": true
+//      "domain_strategy": "prefer_ipv4" // remove this line if you want to resolve the domain remotely (if the server is not sing-box, UDP may not work due to wrong behavior).
+//      "set_system_proxy": false
+    },
+//    {
+//      "type": "tun",
+//      "tag": "tun-in",
+//      "interface_name": "tun3",
+//      "inet4_address": "172.19.0.1/30",
+//      "inet6_address": "fdfe:dcba:9876::1/126",
+//      "stack": "system",
+//      "auto_route": true,
+//      "strict_route": true,
+//      "sniff": true,
+//      "platform": {
+//        "http_proxy": {
+//          "enabled": true,
+//          "server": "127.0.0.1",
+//          "server_port": 1080
+//        }
+//      }
+//    },
+    {
+      "type": "tproxy",
+      "tag": "tproxy-in",
+      "listen": "::",
+      "listen_port": 1536,
+      "sniff": true
+    }
+  ],
+
+// 这里的 proviedrs 需要使用 https://github.com/qjebbs/sing-box
+  "providers": [
+    {
+      "tag": "provider1",
+      "url": "base64 订阅链接1",
+      "interval": "24h",
+      "cache_file": "provider1.txt",
+      "download_detour": "direct"
+    },
+    {
+      "tag": "provider2",
+      "url": "base64 订阅链接2",
+      "interval": "18h",
+      "cache_file": "provider2.txt",
+      "download_detour": "direct",
+
+      "exclude": "官网|剩余|到期|流量"
+    },
+    {
+      "tag": "provider3",
+      "url": "base64 订阅链接3",
+      "interval": "12h",
+      "cache_file": "provider3.txt",
+      "download_detour": "direct",
+
+      "include": "IEPL|专线"
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    },
+    {
+      "type": "block",
+      "tag": "block"
+    },
+    {
+      "type": "dns",
+      "tag": "dns-out"
+    },
+    {
+      "type": "selector",
+      "tag": "Proxy",
+      "providers": [
+        "provider1",
+        "provider2",
+        "provider3"
+      ],
+      "outbounds": [
+        "direct"
+      ]
+    }
+  ],
+  "route": {
+    "rule_set": [
+//      {
+//        "type": "local",
+//        "tag": "block-local",
+//        "format": "source",
+//        "path": "./block.json"
+//      },
+//      {
+//        "type": "local",
+//        "tag": "direct-local",
+//        "format": "source",
+//        "path": "./direct.json"
+//      },
+      {
+        "type": "remote",
+        "tag": "category-ads-all",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs",
+        "download_detour": "Proxy",
+        "update_interval": "24h"
+      },
+      {
+        "type": "remote",
+        "tag": "apple@cn",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-apple@cn.srs",
+        "download_detour": "Proxy",
+        "update_interval": "24h"
+      },
+      {
+        "type": "remote",
+        "tag": "category-games@cn",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-games@cn.srs",
+        "download_detour": "Proxy",
+        "update_interval": "24h"
+      },
+      {
+        "type": "remote",
+        "tag": "private",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-private.srs",
+        "download_detour": "Proxy",
+        "update_interval": "24h"
+      },
+      {
+        "type": "remote",
+        "tag": "cn-domain",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs",
+        "download_detour": "Proxy",
+        "update_interval": "24h"
+      },
+      {
+        "type": "remote",
+        "tag": "cn-ip",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs",
+        "download_detour": "Proxy",
+        "update_interval": "24h"
+      }
+    ],
+    "rules": [
+      {
+        "type": "logical",
+        "mode": "or",
+        "rules":[
+          {
+            "port":53
+          },
+          {
+            "protocol": "dns"
+          }
+        ],
+        "outbound": "dns-out"
+      },
+      {
+        "clash_mode": "Global",
+        "outbound": "Proxy"
+      },
+      {
+        "clash_mode": "Direct",
+        "outbound": "direct"
+      },
+      {
+        "rule_set": [
+//          "block-local",
+          "category-ads-all"
+        ],
+        "outbound": "block"
+      },
+      {
+        "rule_set": [
+//          "direct-local",
+          "apple@cn",
+          "category-games@cn",
+          "private",
+          "cn-domain"
+        ],
+        "outbound": "direct"
+      },
+      {
+        "rule_set": "cn-domain",
+        "outbound": "direct"
+      },
+      {
+        "rule_set": "cn-ip",
+        "outbound": "direct"
+      },
+      {
+        "ip_is_private": true,
+        "outbound": "direct"
+      }
+    ],
+//    "auto_detect_interface": true,
+//    Tun 一般需要开启
+//    "default_mark": 233,
+//    Tproxy 可能用到
+    "find_process": true,
+    "final": "Proxy"
+  },
+  "experimental": {
+    "cache_file": {
+      "enabled": true,
+      "store_fakeip": true
+    },
+    "clash_api": {
+      "external_controller": "0.0.0.0:9999",
+      "secret": "singbox",
+      "external_ui": "dashboard"
+    }
+  }
+}
