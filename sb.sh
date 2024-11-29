@@ -176,6 +176,7 @@ install_sing_box() {
       "type": "shadowsocks",
       "tag": "shadowsocks-in",
       "listen": "127.0.0.1",
+      "port": $port,
       "method": "$ss_method",
       "password": "$ss_pwd"
     }
