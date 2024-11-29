@@ -76,7 +76,7 @@ output_node_info() {
 
     systemctl restart sing-box
     echo -e "${YELLOW}Node Information:${NC}"
-    echo -e "${CYAN}${country_code} = ss, ${ip}, ${port}, encrypt-method=${ss_method}, password=${ss_pwd}, shadow-tls-password=${shadowtls_pwd}, shadow-tls-sni=${sni}, shadow-tls-version=3${NC}"
+    echo -e "${CYAN}${country_code} = ss, ${ip}, ${port}, encrypt-method=${ss_method}, password=${ss_pwd}, shadow-tls-password=${shadowtls_pwd}, shadow-tls-sni=${sni}, shadow-tls-version=3${NC}, udp-relay=true, udp-port=${ss_port}${NC}"
 }
 
 # Function to detect architecture
@@ -144,6 +144,7 @@ install_sing_box() {
         echo -e "${RED}Port $port is already in use, please choose another port${NC}"
         read -p "Set Sing-box port [10000-65535] (Enter for random): " port
         [[ -z $port ]] && port=$(shuf -i 10000-65535 -n 1)
+        ss_port=$port+1
     done
     echo -e "${GREEN}Using port $port for Sing-box${NC}"
 
@@ -175,7 +176,8 @@ install_sing_box() {
     {
       "type": "shadowsocks",
       "tag": "shadowsocks-in",
-      "listen": "127.0.0.1",
+      "listen": "::",
+      "listen_port": $ss_port,
       "method": "$ss_method",
       "password": "$ss_pwd"
     }
@@ -218,43 +220,43 @@ install_sing_box() {
     "rules": [
       {
         "protocol": "dns",
-        "outbound": "dns-out"
+        "action": "hijack-dns"
       },
       {
         "ip_is_private": true,
-        "outbound": "block"
+        "action": "reject"
       },
       {
         "rule_set": ["geoip-cn"],
-        "outbound": "direct"
+        "action": "direct"
       },
       {
         "rule_set": ["geosite-cn"],
-        "outbound": "direct"
+        "action": "direct"
       },
       {
         "rule_set": ["geosite-category-ads-all"],
-        "outbound": "block"
+        "action": "reject"
       },
       {
-        "rule_set": ["ai-non-ip"],
-        "outbound": "prefer-ipv4"
+        "rule_set": ["geosite-ai"],
+        "action": "route-options",
+        "domain_strategy": "prefer_ipv4"
       },
       {
         "rule_set": ["geosite-google"],
-        "outbound": "prefer-ipv6"
+        "action": "route-options",
+        "domain_strategy": "prefer_ipv6"
       },
       {
         "rule_set": ["geosite-netflix", "geosite-disney"],
-        "outbound": "ipv6-only"
+        "action": "route-options",
+        "domain_strategy": "ipv6_only"
       },
       {
-        "rule_set": ["stream-non-ip"],
-        "outbound": "prefer-ipv6"
-      },
-      {
-        "rule_set": ["stream-ip"],
-        "outbound": "prefer-ipv6"
+        "rule_set": ["geosite-media"],
+        "action": "route-options",
+        "domain_strategy": "prefer_ipv6"
       }
     ],
     "rule_set": [
@@ -301,24 +303,17 @@ install_sing_box() {
         "download_detour": "direct"
       },
       {
-        "tag": "stream-non-ip",
+        "tag": "geosite-ai",
         "type": "remote",
-        "format": "source",
-        "url": "https://ruleset.skk.moe/sing-box/non_ip/stream.json",
+        "format": "binary",
+        "url": "https://github.com/MetaCubeX/meta-rules-dat/raw/sing/geo/geosite/category-ai-chat-!cn.srs",
         "download_detour": "direct"
       },
       {
-        "tag": "stream-ip",
+        "tag": "geosite-media",
         "type": "remote",
-        "format": "source",
-        "url": "https://ruleset.skk.moe/sing-box/ip/stream.json",
-        "download_detour": "direct"
-      },
-      {
-        "tag": "ai-non-ip",
-        "type": "remote",
-        "format": "source",
-        "url": "https://ruleset.skk.moe/sing-box/non_ip/ai.json",
+        "format": "binary",
+        "url": "https://github.com/MetaCubeX/meta-rules-dat/raw/sing/geo/geosite/category-media.srs",
         "download_detour": "direct"
       }
     ],
@@ -335,58 +330,36 @@ install_sing_box() {
       {
         "tag": "cloudflare",
         "address": "tls://1.1.1.1",
-        "address_strategy": "prefer_ipv4"
+        "strategy": "prefer_ipv4"
       },
       {
         "tag": "dnspod",
-        "address": "tls://119.29.29.29",
-        "address_strategy": "ipv4_only"
-      },
-      {
-        "tag": "ali",
-        "address": "tls://223.5.5.5",
-        "address_strategy": "prefer_ipv4"
-      },
-      {
-        "tag": "block",
-        "address": "rcode://success"
+        "address": "tls://dot.pub",
+        "strategy": "ipv4_only"
       }
     ],
     "rules": [
       {
         "rule_set": ["geosite-category-ads-all"],
-        "server": "block",
+        "action": "reject",
         "disable_cache": true
       },
       {
-        "rule_set": ["geosite-cn"],
-        "query_type": ["A", "AAAA"],
+        "rule_set": ["geosite-cn", "geoip-cn"],
+        "action": "route",
         "server": "dnspod"
       },
       {
-        "rule_set": ["geoip-cn"],
-        "query_type": ["A", "AAAA"],
-        "server": "ali"
-      },
-            {
-        "rule_set": ["geosite-google"],
-        "server": "cloudflare"
-      },
-      {
-        "rule_set": ["geosite-netflix", "geosite-disney"],
-        "server": "cloudflare"
-      },
-      {
-        "rule_set": ["stream-non-ip"],
-        "server": "cloudflare"
-      },
-      {
-        "rule_set": ["stream-ip"],
-        "server": "cloudflare"
+        "rule_set": ["geosite-google", "geosite-netflix", "geosite-disney", "geosite-ai", "geosite-media"],
+        "action": "route",
+        "server": "cloudflare",
+        "client_subnet": "1.1.1.1"
       }
     ],
     "strategy": "prefer_ipv4",
-    "final": "cloudflare"
+    "final": "cloudflare",
+    "independent_cache": true,
+    "cache_capacity": 8192
   }
 }
 EOF
@@ -531,7 +504,7 @@ change_ss_method() {
 # Function to change routing preferences
 change_routing_preferences() {
     local services=("Google" "Disney" "Netflix" "Streaming" "AI")
-    local options=("prefer-ipv4" "prefer-ipv6" "ipv4-only" "ipv6-only")
+    local options=("prefer_ipv4" "prefer_ipv6" "ipv4_only" "ipv6_only")
 
     while true; do
         echo -e "${YELLOW}Select a service to modify its routing preference:${NC}"
@@ -558,35 +531,33 @@ change_routing_preferences() {
                 # Backup the configuration file
                 cp /etc/sing-box/config.json /etc/sing-box/config.json.bak || { echo -e "${RED}Failed to backup configuration${NC}"; return 1; }
 
-                # Use a more robust jq command
+                # Use updated jq command for new config format
                 case $selected_service in
                     "Google")
-                        jq --arg opt "$selected_option" '(.route.rules[] | select(.rule_set != null and (.rule_set | type == "array") and (.rule_set | index("geosite-google") != null)) | .outbound) |= $opt' /etc/sing-box/config.json > /tmp/config.json
+                        jq --arg opt "$selected_option" '(.route.rules[] | select(.rule_set != null and (.rule_set | index("geosite-google") != null)) | .domain_strategy) |= $opt' /etc/sing-box/config.json > /tmp/config.json
                         ;;
                     "Disney")
-                        jq --arg opt "$selected_option" '(.route.rules[] | select(.rule_set != null and (.rule_set | type == "array") and (.rule_set | index("geosite-disney") != null)) | .outbound) |= $opt' /etc/sing-box/config.json > /tmp/config.json
+                        jq --arg opt "$selected_option" '(.route.rules[] | select(.rule_set != null and (.rule_set | index("geosite-disney") != null)) | .domain_strategy) |= $opt' /etc/sing-box/config.json > /tmp/config.json
                         ;;
                     "Netflix")
-                        jq --arg opt "$selected_option" '(.route.rules[] | select(.rule_set != null and (.rule_set | type == "array") and ((.rule_set | index("geosite-netflix") != null) or (.rule_set | index("geosite-disney") != null))) | .outbound) |= $opt' /etc/sing-box/config.json > /tmp/config.json
+                        jq --arg opt "$selected_option" '(.route.rules[] | select(.rule_set != null and ((.rule_set | index("geosite-netflix") != null) or (.rule_set | index("geosite-disney") != null))) | .domain_strategy) |= $opt' /etc/sing-box/config.json > /tmp/config.json
                         ;;
                     "Streaming")
-                        jq --arg opt "$selected_option" '(.route.rules[] | select(.rule_set != null and (.rule_set | type == "array") and ((.rule_set | index("stream-non-ip") != null) or (.rule_set | index("stream-ip") != null))) | .outbound) |= $opt' /etc/sing-box/config.json > /tmp/config.json
+                        jq --arg opt "$selected_option" '(.route.rules[] | select(.rule_set != null and (.rule_set | index("geosite-media") != null)) | .domain_strategy) |= $opt' /etc/sing-box/config.json > /tmp/config.json
                         ;;
                     "AI")
-                        jq --arg opt "$selected_option" '(.route.rules[] | select(.rule_set != null and (.rule_set | type == "array") and (.rule_set | index("ai-non-ip") != null))) | .outbound) |= $opt' /etc/sing-box/config.json > /tmp/config.json
+                        jq --arg opt "$selected_option" '(.route.rules[] | select(.rule_set != null and (.rule_set | index("geosite-ai") != null)) | .domain_strategy) |= $opt' /etc/sing-box/config.json > /tmp/config.json
                         ;;
                 esac
 
-                # Check if jq command was successful
+                # 其余验证和应用逻辑保持不变
                 if [ $? -eq 0 ]; then
-                    # Validate the new configuration
                     if jq empty /tmp/config.json > /dev/null 2>&1; then
                         mv /tmp/config.json /etc/sing-box/config.json
                         echo -e "${GREEN}Configuration updated successfully.${NC}"
                         
-                        # Show the updated configuration
                         echo -e "${YELLOW}Updated configuration for $selected_service:${NC}"
-                        jq ".route.rules[] | select(.rule_set != null and (.rule_set | type == \"array\") and ((.rule_set | index(\"geosite-$selected_service\") != null) or (.rule_set | index(\"stream-non-ip\") != null) or (.rule_set | index(\"stream-ip\") != null)))" /etc/sing-box/config.json
+                        jq ".route.rules[] | select(.rule_set != null and (.rule_set | index(\"geosite-$selected_service\") != null))" /etc/sing-box/config.json
 
                         read -p "Do you want to apply this change? (y/n): " confirm
                         if [[ $confirm == [yY] || $confirm == [yY][eE][sS] ]]; then
