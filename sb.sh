@@ -286,7 +286,7 @@ install_sing_box() {
             "type": "direct",
             "tag": "direct_ipv6_only",
             "domain_strategy": "ipv6_only"
-        },
+        }
     ],
     "route": {
         "rules": [
