@@ -203,11 +203,13 @@ install_sing_box() {
       },
       {
         "rule_set": ["geoip-cn"],
-        "action": "direct"
+        "action": "route",
+        "outbound": "direct"
       },
       {
         "rule_set": ["geosite-cn"],
-        "action": "direct"
+        "action": "route",
+        "outbound": "direct"
       },
       {
         "rule_set": ["geosite-category-ads-all"],
@@ -216,22 +218,22 @@ install_sing_box() {
       {
         "rule_set": ["geosite-ai"],
         "action": "route-options",
-        "domain_strategy": "prefer_ipv4"
+        "strategy": "prefer_ipv4"
       },
       {
         "rule_set": ["geosite-google"],
         "action": "route-options",
-        "domain_strategy": "prefer_ipv6"
+        "strategy": "prefer_ipv6"
       },
       {
         "rule_set": ["geosite-netflix", "geosite-disney"],
         "action": "route-options",
-        "domain_strategy": "ipv6_only"
+        "strategy": "ipv6_only"
       },
       {
         "rule_set": ["geosite-media"],
         "action": "route-options",
-        "domain_strategy": "prefer_ipv6"
+        "strategy": "prefer_ipv6"
       }
     ],
     "rule_set": [
@@ -509,19 +511,19 @@ change_routing_preferences() {
                 # Use updated jq command for new config format
                 case $selected_service in
                     "Google")
-                        jq --arg opt "$selected_option" '(.route.rules[] | select(.rule_set != null and (.rule_set | index("geosite-google") != null)) | .domain_strategy) |= $opt' /etc/sing-box/config.json > /tmp/config.json
+                        jq --arg opt "$selected_option" '(.route.rules[] | select(.rule_set != null and (.rule_set | index("geosite-google") != null)) | .strategy) |= $opt' /etc/sing-box/config.json > /tmp/config.json
                         ;;
                     "Disney")
-                        jq --arg opt "$selected_option" '(.route.rules[] | select(.rule_set != null and (.rule_set | index("geosite-disney") != null)) | .domain_strategy) |= $opt' /etc/sing-box/config.json > /tmp/config.json
+                        jq --arg opt "$selected_option" '(.route.rules[] | select(.rule_set != null and (.rule_set | index("geosite-disney") != null)) | .strategy) |= $opt' /etc/sing-box/config.json > /tmp/config.json
                         ;;
                     "Netflix")
-                        jq --arg opt "$selected_option" '(.route.rules[] | select(.rule_set != null and ((.rule_set | index("geosite-netflix") != null) or (.rule_set | index("geosite-disney") != null))) | .domain_strategy) |= $opt' /etc/sing-box/config.json > /tmp/config.json
+                        jq --arg opt "$selected_option" '(.route.rules[] | select(.rule_set != null and ((.rule_set | index("geosite-netflix") != null) | .strategy) |= $opt' /etc/sing-box/config.json > /tmp/config.json
                         ;;
                     "Streaming")
-                        jq --arg opt "$selected_option" '(.route.rules[] | select(.rule_set != null and (.rule_set | index("geosite-media") != null)) | .domain_strategy) |= $opt' /etc/sing-box/config.json > /tmp/config.json
+                        jq --arg opt "$selected_option" '(.route.rules[] | select(.rule_set != null and (.rule_set | index("geosite-media") != null)) | .strategy) |= $opt' /etc/sing-box/config.json > /tmp/config.json
                         ;;
                     "AI")
-                        jq --arg opt "$selected_option" '(.route.rules[] | select(.rule_set != null and (.rule_set | index("geosite-ai") != null)) | .domain_strategy) |= $opt' /etc/sing-box/config.json > /tmp/config.json
+                        jq --arg opt "$selected_option" '(.route.rules[] | select(.rule_set != null and (.rule_set | index("geosite-ai") != null)) | .strategy) |= $opt' /etc/sing-box/config.json > /tmp/config.json
                         ;;
                 esac
 
