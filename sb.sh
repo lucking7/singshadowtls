@@ -203,12 +203,10 @@ install_sing_box() {
       },
       {
         "rule_set": ["geoip-cn"],
-        "action": "route",
         "outbound": "direct"
       },
       {
         "rule_set": ["geosite-cn"],
-        "action": "route",
         "outbound": "direct"
       },
       {
