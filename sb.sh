@@ -248,7 +248,7 @@ install_sing_box() {
         {
             "type": "shadowsocks",
             "tag": "shadowsocks-in",
-            "listen": "127.0.0.1",
+            "listen": "::",
             "listen_port": $ss_port,
             "method": "$ss_method",
             "password": "$ss_pwd"
@@ -367,7 +367,7 @@ install_sing_box() {
                 "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-google.srs",
                 "download_detour": "direct"
             },
-                       {
+            {
                 "tag": "geosite-netflix",
                 "type": "remote",
                 "format": "binary",
@@ -380,7 +380,7 @@ install_sing_box() {
                 "format": "binary",
                 "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-disney.srs",
                 "download_detour": "direct"
-            }
+            },
             {
                 "tag": "geosite-category-media",
                 "type": "remote",
