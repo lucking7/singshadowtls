@@ -144,9 +144,18 @@ install_sing_box() {
         echo -e "${RED}Port $port is already in use, please choose another port${NC}"
         read -p "Set Sing-box port [10000-65535] (Enter for random): " port
         [[ -z $port ]] && port=$(shuf -i 10000-65535 -n 1)
-        ss_port=$port+1
     done
-    echo -e "${GREEN}Using port $port for Sing-box${NC}"
+
+    ss_port=$((port + 1))
+    until [[ -z $(ss -ntlp | awk '{print $4}' | sed 's/.*://g' | grep -w "$ss_port") ]]; do
+        ss_port=$(shuf -i 10000-65535 -n 1)
+        if [ "$ss_port" -eq "$port" ]; then
+            continue
+        fi
+    done
+
+    echo -e "${GREEN}Using port $port for ShadowTLS${NC}"
+    echo -e "${GREEN}Using port $ss_port for Shadowsocks${NC}"
 
     read -p "Set fake website for Sing-box (without https://) [Enter for weather-data.apple.com]: " proxysite
     [[ -z $proxysite ]] && proxysite="weather-data.apple.com"
