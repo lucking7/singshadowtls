@@ -76,7 +76,7 @@ output_node_info() {
 
     systemctl restart sing-box
     echo -e "${YELLOW}Node Information:${NC}"
-    echo -e "${CYAN}${country_code} = ss, ${ip}, ${port}, encrypt-method=${ss_method}, password=${ss_pwd}, shadow-tls-password=${shadowtls_pwd}, shadow-tls-sni=${sni}, shadow-tls-version=3${NC}"
+    echo -e "${CYAN}${country_code} = ss, ${ip}, ${port}, encrypt-method=${ss_method}, password=${ss_pwd}, shadow-tls-password=${shadowtls_pwd}, shadow-tls-sni=${sni}, shadow-tls-version=3${NC}, udp-relay=true, udp-port=${ss_port}"
 }
 
 # Function to detect architecture
@@ -266,7 +266,27 @@ install_sing_box() {
         {
             "type": "dns",
             "tag": "dns-out"
-        }
+        },
+        {
+            "type": "direct",
+            "tag": "direct_prefer_ipv4",
+            "domain_strategy": "prefer_ipv4"
+        },
+        {
+            "type": "direct",
+            "tag": "direct_ipv4_only",
+            "domain_strategy": "ipv4_only"
+        },
+        {
+            "type": "direct",
+            "tag": "direct_prefer_ipv6",
+            "domain_strategy": "prefer_ipv6"
+        },
+        {
+            "type": "direct",
+            "tag": "direct_ipv6_only",
+            "domain_strategy": "ipv6_only"
+        },
     ],
     "route": {
         "rules": [
@@ -302,33 +322,23 @@ install_sing_box() {
             },
             {
                 "rule_set": ["geosite-ai"],
-                "action": "resolve",
-                "strategy": "prefer_ipv4",
-                "outbound": "direct"
+                "outbound": "direct_ipv4_only"
             },
             {
                 "rule_set": ["geosite-google"],
-                "action": "resolve",
-                "strategy": "prefer_ipv6",
-                "outbound": "direct"
+                "outbound": "direct_ipv6_only"
             },
             {
                 "rule_set": ["geosite-netflix"],
-                "action": "resolve",
-                "strategy": "ipv6_only",
-                "outbound": "direct"
+                "outbound": "direct_ipv6_only"
             },
             {
                 "rule_set": ["geosite-disney"],
-                "action": "resolve",
-                "strategy": "ipv6_only",
-                "outbound": "direct"
+                "outbound": "direct_ipv6_only"
             },
             {
                 "rule_set": ["geosite-category-media"],
-                "action": "resolve",
-                "strategy": "prefer_ipv6",
-                "outbound": "direct"
+                "outbound": "direct_ipv6_only"
             }
         ],
         "rule_set": [
@@ -541,8 +551,14 @@ change_ss_method() {
 
 # Function to change routing preferences
 change_routing_preferences() {
-    local services=("Google" "Netflix" "Disney" "Media" "AI" "General")
+    local services=("AI" "Google" "Netflix" "Disney" "Media")
     local strategies=("prefer_ipv4" "prefer_ipv6" "ipv4_only" "ipv6_only")
+    local outbound_map=(
+        "direct_prefer_ipv4"
+        "direct_prefer_ipv6"
+        "direct_ipv4_only"
+        "direct_ipv6_only"
+    )
 
     while true; do
         echo -e "${YELLOW}Select a service to modify its network strategy:${NC}"
@@ -556,6 +572,15 @@ change_routing_preferences() {
             return
         elif [[ $service_choice -ge 1 && $service_choice -le ${#services[@]} ]]; then
             local selected_service=${services[$((service_choice-1))]}
+            local rule_set="geosite-"
+            
+            case "$selected_service" in
+                "AI") rule_set+="ai" ;;
+                "Google") rule_set+="google" ;;
+                "Netflix") rule_set+="netflix" ;;
+                "Disney") rule_set+="disney" ;;
+                "Media") rule_set+="category-media" ;;
+            esac
 
             echo -e "${YELLOW}Select network strategy for $selected_service:${NC}"
             for i in "${!strategies[@]}"; do
@@ -564,11 +589,41 @@ change_routing_preferences() {
             read -p "Enter your choice [1-${#strategies[@]}]: " strategy_choice
 
             if [[ $strategy_choice -ge 1 && $strategy_choice -le ${#strategies[@]} ]]; then
-                local selected_strategy=${strategies[$((strategy_choice-1))]}
-                update_rule_strategy "$selected_service" "$selected_strategy"
+                local selected_outbound=${outbound_map[$((strategy_choice-1))]}
+                update_outbound_strategy "$rule_set" "$selected_outbound"
             fi
         fi
     done
+}
+
+update_outbound_strategy() {
+    local rule_set=$1
+    local new_outbound=$2
+
+    # 备份配置
+    cp /etc/sing-box/config.json /etc/sing-box/config.json.bak
+
+    # 使用 jq 更新规则的 outbound
+    jq --arg rs "$rule_set" --arg out "$new_outbound" '
+    .route.rules = [
+        .route.rules[] | 
+        if (.rule_set != null and .rule_set[0] == $rs) then
+            . + {outbound: $out}
+        else
+            .
+        end
+    ]' /etc/sing-box/config.json > /tmp/config.json
+
+    if jq empty /tmp/config.json 2>/dev/null; then
+        mv /tmp/config.json /etc/sing-box/config.json
+        echo -e "${GREEN}Successfully updated network strategy for $rule_set to $new_outbound${NC}"
+        
+        # 重启服务
+        systemctl restart sing-box
+    else
+        echo -e "${RED}Failed to update configuration. Restoring backup.${NC}"
+        mv /etc/sing-box/config.json.bak /etc/sing-box/config.json
+    fi
 }
 
 # Function to modify configuration
