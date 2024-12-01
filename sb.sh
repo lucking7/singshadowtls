@@ -182,40 +182,6 @@ install_sing_box() {
       "password": "$ss_pwd"
     }
   ],
-  "outbounds": [
-    {
-      "type": "direct",
-      "tag": "direct"
-    },
-    {
-      "type": "block",
-      "tag": "block"
-    },
-    {
-      "type": "direct",
-      "tag": "ipv4-only",
-      "domain_strategy": "ipv4_only"
-    },
-    {
-      "type": "direct",
-      "tag": "prefer-ipv4",
-      "domain_strategy": "prefer_ipv4"
-    },
-    {
-      "type": "direct",
-      "tag": "ipv6-only",
-      "domain_strategy": "ipv6_only"
-    },
-    {
-      "type": "direct",
-      "tag": "prefer-ipv6",
-      "domain_strategy": "prefer_ipv6"
-    },
-    {
-      "type": "dns",
-      "tag": "dns-out"
-    }
-  ],
   "route": {
     "rules": [
       {
