@@ -7,8 +7,6 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 MAGENTA='\033[0;35m'
 CYAN='\033[0;36m'
-GRAY='\033[0;37m'
-BOLD='\033[1m'
 NC='\033[0m' # No Color
 
 # Function to check root privileges
@@ -70,15 +68,36 @@ get_ip_info() {
 
 # Function to output node information
 output_node_info() {
+    local port=$(jq -r '.inbounds[] | select(.type == "shadowtls") | .listen_port' /etc/sing-box/config.json)
+    local ss_port=$(jq -r '.inbounds[] | select(.type == "shadowsocks") | .listen_port' /etc/sing-box/config.json)
     local ss_method=$(jq -r '.inbounds[] | select(.type == "shadowsocks") | .method' /etc/sing-box/config.json)
     local ss_pwd=$(jq -r '.inbounds[] | select(.type == "shadowsocks") | .password' /etc/sing-box/config.json)
     local shadowtls_pwd=$(jq -r '.inbounds[] | select(.type == "shadowtls") | .users[0].password' /etc/sing-box/config.json)
     local sni=$(jq -r '.inbounds[] | select(.type == "shadowtls") | .handshake.server' /etc/sing-box/config.json)
-    local port=$(jq -r '.inbounds[] | select(.type == "shadowtls") | .listen_port' /etc/sing-box/config.json)
+    local ip=$(curl -s4 ip.sb)
 
-    systemctl restart sing-box
     echo -e "${YELLOW}Node Information:${NC}"
     echo -e "${CYAN}${country_code} = ss, ${ip}, ${port}, encrypt-method=${ss_method}, password=${ss_pwd}, shadow-tls-password=${shadowtls_pwd}, shadow-tls-sni=${sni}, shadow-tls-version=3${NC}, udp-relay=true, udp-port=${ss_port}"
+}
+
+# 添加一个新的格式化配置文件的函数
+format_config() {
+    local temp_file="/tmp/config.json"
+    if sing-box format -c /etc/sing-box/config.json > "$temp_file"; then
+        if sing-box check -c "$temp_file"; then
+            mv "$temp_file" /etc/sing-box/config.json
+            echo -e "${GREEN}Configuration formatted and validated successfully${NC}"
+            return 0
+        else
+            echo -e "${RED}Configuration validation failed${NC}"
+            rm -f "$temp_file"
+            return 1
+        fi
+    else
+        echo -e "${RED}Configuration formatting failed${NC}"
+        rm -f "$temp_file"
+        return 1
+    fi
 }
 
 # Function to detect architecture
@@ -109,9 +128,9 @@ install_sing_box() {
     echo -e "${BLUE}Configuring Sing-Box...${NC}"
     rm -f /etc/sing-box/config.json
 
-    echo -e "${YELLOW}Select Shadowsocks encryption method:${NC}"
+    echo -e "${YELLOW}Select Shadowsocks encryption method (Default: 2022-blake3-aes-256-gcm):${NC}"
     echo -e "${CYAN}1) 2022-blake3-aes-128-gcm${NC}"
-    echo -e "${CYAN}2) 2022-blake3-aes-256-gcm (Default)${NC}"
+    echo -e "${CYAN}2) 2022-blake3-aes-256-gcm ${NC}"
     echo -e "${CYAN}3) 2022-blake3-chacha20-poly1305${NC}"
     echo -e "${CYAN}4) aes-128-gcm${NC}"
     echo -e "${CYAN}5) aes-256-gcm${NC}"
@@ -170,22 +189,19 @@ install_sing_box() {
         "servers": [
             {
                 "tag": "dns_cf",
-                "address": "tls://1.1.1.1",
+                "address": "https://1.1.1.1/dns-query",
                 "address_resolver": "dns_resolver",
                 "strategy": "prefer_ipv4",
-                "detour": "direct"
             },
             {
                 "tag": "dns_cn",
-                "address": "tls://dot.pub",
+                "address": "https://dns.pub/dns-query",
                 "address_resolver": "dns_resolver",
                 "strategy": "ipv4_only",
-                "detour": "direct"
             },
             {
                 "tag": "dns_resolver",
                 "address": "1.1.1.1",
-                "detour": "direct"
             },
             {
                 "tag": "dns_block",
@@ -569,32 +585,35 @@ change_routing_preferences() {
     )
 
     while true; do
-        echo -e "\n${MAGENTA}┌─────────────── Network Strategy ───────────────┐${NC}"
-        echo -e "${YELLOW}${BOLD}Select a service to modify its network strategy:${NC}"
+        echo -e "${YELLOW}Select a service to modify its network strategy:${NC}"
         for i in "${!services[@]}"; do
-            echo -e "${CYAN}$((i+1)))${NC} ${BOLD}${services[$i]}${NC}"
+            echo -e "${CYAN}$((i+1))) ${services[$i]}${NC}"
         done
-        echo -e "${RED}0)${NC} ${BOLD}Return to previous menu${NC}"
-        echo -e "${MAGENTA}└───────────────────────────────────────────────┘${NC}"
-        
-        read -p "$(echo -e ${BOLD}Enter your choice [0-${#services[@]}]:${NC} )" service_choice
+        echo -e "${CYAN}0) Return to previous menu${NC}"
+        read -p "Enter your choice [0-${#services[@]}]: " service_choice
 
         if [[ $service_choice -eq 0 ]]; then
             return
         elif [[ $service_choice -ge 1 && $service_choice -le ${#services[@]} ]]; then
             local selected_service=${services[$((service_choice-1))]}
+            local rule_set="geosite-"
             
-            echo -e "\n${MAGENTA}┌─────────────── ${selected_service} Strategy ───────────────┐${NC}"
-            echo -e "${YELLOW}${BOLD}Select network strategy:${NC}"
+            case "$selected_service" in
+                "AI") rule_set+="ai" ;;
+                "Google") rule_set+="google" ;;
+                "Netflix") rule_set+="netflix" ;;
+                "Disney") rule_set+="disney" ;;
+                "Media") rule_set+="category-media" ;;
+            esac
+
+            echo -e "${YELLOW}Select network strategy for $selected_service:${NC}"
             for i in "${!strategies[@]}"; do
-                echo -e "${CYAN}$((i+1)))${NC} ${BOLD}${strategies[$i]}${NC}"
+                echo -e "${CYAN}$((i+1))) ${strategies[$i]}${NC}"
             done
-            echo -e "${MAGENTA}└───────────────────────────────────────────────┘${NC}"
-            
-            read -p "$(echo -e ${BOLD}Enter your choice [1-${#strategies[@]}]:${NC} )" strategy_choice
+            read -p "Enter your choice [1-${#strategies[@]}]: " strategy_choice
 
             if [[ $strategy_choice -ge 1 && $strategy_choice -le ${#strategies[@]} ]]; then
-                echo -e "\n${BLUE}${BOLD}Updating configuration...${NC}"
+                local selected_outbound=${outbound_map[$((strategy_choice-1))]}
                 
                 # 备份配置
                 cp /etc/sing-box/config.json /etc/sing-box/config.json.bak
@@ -611,23 +630,21 @@ change_routing_preferences() {
                 ]' /etc/sing-box/config.json > /tmp/config.json
 
                 if format_config; then
-                    echo -e "\n${GREEN}${BOLD}✓ Successfully updated network strategy${NC}"
-                    echo -e "${GRAY}Service: ${BOLD}${selected_service}${NC}"
-                    echo -e "${GRAY}Strategy: ${BOLD}${strategies[$((strategy_choice-1))]}${NC}"
+                    echo -e "${GREEN}Successfully updated network strategy for $selected_service to ${strategies[$((strategy_choice-1))]}${NC}"
+                    systemctl restart sing-box
                     
-                    echo -e "\n${YELLOW}${BOLD}Current Configuration:${NC}"
-                    echo -e "${CYAN}────────────────────────────────${NC}"
-                    jq --arg rs "$rule_set" '.route.rules[] | select(.rule_set != null and .rule_set[0] == $rs)' /etc/sing-box/config.json | jq -C
-                    echo -e "${CYAN}────────────────────────────────${NC}"
+                    # 显示当前配置
+                    echo -e "\n${YELLOW}Current configuration for $selected_service:${NC}"
+                    jq --arg rs "$rule_set" '.route.rules[] | select(.rule_set != null and .rule_set[0] == $rs)' /etc/sing-box/config.json
                 else
-                    echo -e "${RED}${BOLD}✗ Failed to update configuration. Restoring backup.${NC}"
+                    echo -e "${RED}Failed to update configuration. Restoring backup.${NC}"
                     mv /etc/sing-box/config.json.bak /etc/sing-box/config.json
                 fi
             fi
         fi
 
         echo ""
-        read -p "$(echo -e ${GRAY}Press Enter to continue...${NC})"
+        read -p "Press Enter to continue..."
     done
 }
 
@@ -656,73 +673,27 @@ modify_configuration() {
 
 # Function to show configuration
 show_configuration() {
-    echo -e "\n${MAGENTA}┌─────────────── Current Configuration ───────────────┐${NC}"
-    echo -e "${YELLOW}${BOLD}Node Information:${NC}"
-    echo -e "${CYAN}────────────────────────────────${NC}"
-    
-    local ip=$(curl -s4 ip.sb)
-    local port=$(grep '"listen_port"' /etc/sing-box/config.json | head -n1 | awk '{print $2}' | tr -d ',')
-    local ss_port=$(grep '"listen_port"' /etc/sing-box/config.json | tail -n1 | awk '{print $2}' | tr -d ',')
-    local ss_method=$(grep -A5 '"type": "shadowsocks"' /etc/sing-box/config.json | grep '"method"' | awk -F'"' '{print $4}')
-    local server=$(grep '"server":' /etc/sing-box/config.json | awk -F'"' '{print $4}')
-
-    echo -e "${GRAY}IP Address:${NC}    ${BOLD}${ip}${NC}"
-    echo -e "${GRAY}ShadowTLS Port:${NC} ${BOLD}${port}${NC}"
-    echo -e "${GRAY}SS Port:${NC}        ${BOLD}${ss_port}${NC}"
-    echo -e "${GRAY}SS Method:${NC}      ${BOLD}${ss_method}${NC}"
-    echo -e "${GRAY}SNI:${NC}            ${BOLD}${server}${NC}"
-    
-    echo -e "${CYAN}────────────────────────────────${NC}"
-    echo -e "${MAGENTA}└───────────────────────────────────────────────┘${NC}"
-}
-
-format_config() {
-    local temp_file="/tmp/config.json"
-    echo -e "${BLUE}${BOLD}Formatting configuration...${NC}"
-    
-    if sing-box format -c /etc/sing-box/config.json > "$temp_file"; then
-        if sing-box check -c "$temp_file"; then
-            mv "$temp_file" /etc/sing-box/config.json
-            echo -e "${GREEN}${BOLD}✓ Configuration formatted and validated${NC}"
-            
-            echo -e "${BLUE}${BOLD}Restarting Sing-Box service...${NC}"
-            if systemctl restart sing-box; then
-                echo -e "${GREEN}${BOLD}✓ Service restarted successfully${NC}"
-                return 0
-            else
-                echo -e "${RED}${BOLD}✗ Service restart failed${NC}"
-                return 1
-            fi
-        else
-            echo -e "${RED}${BOLD}✗ Configuration validation failed${NC}"
-            rm -f "$temp_file"
-            return 1
-        fi
-    else
-        echo -e "${RED}${BOLD}✗ Configuration formatting failed${NC}"
-        rm -f "$temp_file"
-        return 1
-    fi
+    output_node_info
 }
 
 # Main menu function
 menu() {
     while true; do
         clear
-        echo -e "${MAGENTA}┌────────────────────────────────────────────┐${NC}"
-        echo -e "${MAGENTA}│      ${BOLD}ShadowTLS + Shadowsocks Manager${NC}${MAGENTA}      │${NC}"
-        echo -e "${MAGENTA}│           ${BOLD}Powered by Sing-Box${NC}${MAGENTA}             │${NC}"
-        echo -e "${MAGENTA}└────────────────────────────────────────────┘${NC}"
-        echo -e "${CYAN}${BOLD}\"Itadori, you can do it!\" - Jujutsu Kaisen${NC}"
-        echo -e "${GRAY}────────────────────────────────────────────${NC}"
-        echo -e "${GREEN}1)${NC} ${BOLD}Install${NC}     - Install or reinstall service"
-        echo -e "${RED}2)${NC} ${BOLD}Uninstall${NC}   - Remove service completely"
-        echo -e "${BLUE}3)${NC} ${BOLD}Manage${NC}      - Start/Stop/Restart service"
-        echo -e "${YELLOW}4)${NC} ${BOLD}Modify${NC}      - Change configuration"
-        echo -e "${CYAN}5)${NC} ${BOLD}Display${NC}     - Show current configuration"
-        echo -e "${MAGENTA}0)${NC} ${BOLD}Exit${NC}        - Exit this script"
+        echo -e "${MAGENTA}┌─────────────────────────────────────────┐${NC}"
+        echo -e "${MAGENTA}│   ShadowTLS + Shadowsocks Manager       │${NC}"
+        echo -e "${MAGENTA}│          Powered by Sing-Box            │${NC}"
+        echo -e "${MAGENTA}└─────────────────────────────────────────┘${NC}"
+        echo -e "${CYAN}\"Itadori, you can do it!\" - Jujutsu Kaisen${NC}"
+        echo -e "----------------------------------------"
+        echo -e "${GREEN}1) Install${NC}"
+        echo -e "${GREEN}2) Uninstall${NC}"
+        echo -e "${GREEN}3) Manage${NC}"
+        echo -e "${GREEN}4) Modify${NC}"
+        echo -e "${GREEN}5) Display${NC}"
+        echo -e "${GREEN}0) Exit${NC}"
         echo ""
-        read -p "$(echo -e ${BOLD}Enter your choice [0-5]:${NC} )" choice
+        read -p "Enter your choice [0-5]: " choice
 
         case "$choice" in
             1) install_sing_box ;;
@@ -730,15 +701,12 @@ menu() {
             3) manage_sing_box ;;
             4) modify_configuration ;;
             5) show_configuration ;;
-            0) 
-                echo -e "${GREEN}Thank you for using! Goodbye!${NC}"
-                exit 0 
-                ;;
-            *) echo -e "${RED}Invalid option. Please try again.${NC}" ;;
+            0) exit 0 ;;
+            *) echo -e "${RED}Invalid option. Try again.${NC}" ;;
         esac
 
         echo ""
-        read -p "$(echo -e ${GRAY}Press Enter to continue...${NC})"
+        read -p "Press Enter to continue..."
     done
 }
 
