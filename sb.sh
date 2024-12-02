@@ -191,59 +191,28 @@ install_sing_box() {
                 "tag": "dns_cf",
                 "address": "https://1.1.1.1/dns-query",
                 "address_resolver": "dns_resolver",
-                "strategy": "prefer_ipv4",
+                "strategy": "prefer_ipv4"
             },
             {
                 "tag": "dns_cn",
                 "address": "https://dns.pub/dns-query",
                 "address_resolver": "dns_resolver",
-                "strategy": "ipv4_only",
+                "strategy": "ipv4_only"
             },
             {
                 "tag": "dns_resolver",
                 "address": "1.1.1.1",
-            },
-            {
-                "tag": "dns_block",
-                "address": "rcode://success"
-            },
-            {
-                "tag": "dns_refused",
-                "address": "rcode://refused"
+                "detour": "direct"
             }
         ],
         "rules": [
             {
                 "outbound": "any",
                 "server": "dns_resolver"
-            },
-            {
-                "rule_set": ["geosite-category-ads-all"],
-                "server": "dns_block",
-                "disable_cache": true
-            },
-            {
-                "rule_set": ["geosite-cn"],
-                "query_type": [
-                    "A",
-                    "AAAA"
-                ],
-                "server": "dns_cn"
-            },
-            {
-                "query_type": [
-                    "A",
-                    "AAAA",
-                    "CNAME"
-                ],
-                "invert": true,
-                "server": "dns_refused",
-                "disable_cache": true
             }
         ],
-        "final": "dns_cf",
-        "independent_cache": true,
-        "strategy": "prefer_ipv4"
+        "strategy": "prefer_ipv4",
+        "independent_cache": true
     },
     "inbounds": [
         {
@@ -253,7 +222,6 @@ install_sing_box() {
             "version": 3,
             "users": [
                 {
-                    "name": "singbox_user",
                     "password": "$shadowtls_pwd"
                 }
             ],
@@ -261,7 +229,8 @@ install_sing_box() {
                 "server": "$proxysite",
                 "server_port": 443
             },
-            "detour": "shadowsocks-in"
+            "detour": "shadowsocks-in",
+            "strict_mode": true
         },
         {
             "type": "shadowsocks",
@@ -313,25 +282,7 @@ install_sing_box() {
                 "outbound": "dns-out"
             },
             {
-                "port": 853,
-                "network": "tcp",
-                "outbound": "block"
-            },
-            {
-                "port": 443,
-                "network": "udp",
-                "outbound": "block"
-            },
-            {
-                "ip_is_private": true,
-                "outbound": "block"
-            },
-            {
-                "rule_set": ["geoip-cn"],
-                "outbound": "direct"
-            },
-            {
-                "rule_set": ["geosite-cn"],
+                "rule_set": ["geoip-cn", "geosite-cn"],
                 "outbound": "direct"
             },
             {
