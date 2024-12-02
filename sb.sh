@@ -65,7 +65,7 @@ install_dependencies() {
 # Function to get IP information
 get_ip_info() {
     # 获取 IP 地址
-    ip=$(curl -s4 https://api.ip.sb/ip)
+    ip=$(curl -s "https://api.ip.sb/ip" -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0")
     if [[ -z "$ip" ]]; then
         echo -e "${RED}Failed to get IP address${NC}"
         return 1
@@ -73,7 +73,7 @@ get_ip_info() {
 
     # 获取地理位置信息
     local geoip_info
-    geoip_info=$(curl -s "https://api.ip.sb/geoip/$ip")
+    geoip_info=$(curl -s "https://api.ip.sb/geoip/$ip" -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0")
     if [[ -z "$geoip_info" ]]; then
         echo -e "${RED}Failed to get location information${NC}"
         return 1
