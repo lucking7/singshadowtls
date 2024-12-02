@@ -7,6 +7,8 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 MAGENTA='\033[0;35m'
 CYAN='\033[0;36m'
+ORANGE='\033[0;33m'
+PINK='\033[0;35m'
 NC='\033[0m' # No Color
 
 # Function to check root privileges
@@ -62,8 +64,32 @@ install_dependencies() {
 
 # Function to get IP information
 get_ip_info() {
-    ip=$(curl -s https://api.ipify.org)
-    country_code=$(curl -s https://ipapi.co/$ip/country_code)
+    # 获取 IP 地址
+    ip=$(curl -s4 https://api.ip.sb/ip)
+    if [[ -z "$ip" ]]; then
+        echo -e "${RED}Failed to get IP address${NC}"
+        return 1
+    fi
+
+    # 获取地理位置信息
+    local geoip_info
+    geoip_info=$(curl -s "https://api.ip.sb/geoip/$ip")
+    if [[ -z "$geoip_info" ]]; then
+        echo -e "${RED}Failed to get location information${NC}"
+        return 1
+    fi
+
+    # 使用 jq 解析 JSON 响应
+    country_code=$(echo "$geoip_info" | jq -r '.country_code')
+    local city=$(echo "$geoip_info" | jq -r '.city')
+    local country=$(echo "$geoip_info" | jq -r '.country')
+    local isp=$(echo "$geoip_info" | jq -r '.isp')
+
+    # 输出详细信息（可选）
+    echo -e "${BLUE}IP Information:${NC}"
+    echo -e "${CYAN}IP: ${NC}${ip}"
+    echo -e "${CYAN}Location: ${NC}${city}, ${country} (${country_code})"
+    echo -e "${CYAN}ISP: ${NC}${isp}"
 }
 
 # Function to output node information
@@ -77,7 +103,7 @@ output_node_info() {
     local ip=$(curl -s4 ip.sb)
 
     echo -e "${YELLOW}Node Information:${NC}"
-    echo -e "${CYAN}${country_code} = ss, ${ip}, ${port}, encrypt-method=${ss_method}, password=${ss_pwd}, shadow-tls-password=${shadowtls_pwd}, shadow-tls-sni=${sni}, shadow-tls-version=3${NC}, udp-relay=true, udp-port=${ss_port}"
+    echo -e "${CYAN}${country_code}${NC} = ${PINK}ss, ${ip}, ${port}, encrypt-method=${ss_method}, password=${ss_pwd}, shadow-tls-password=${shadowtls_pwd}, shadow-tls-sni=${sni}, shadow-tls-version=3, udp-relay=true, udp-port=${ss_port}${NC}"
 }
 
 # 添加一个新的格式化配置文件的函数
@@ -282,10 +308,6 @@ install_sing_box() {
                 "outbound": "dns-out"
             },
             {
-                "rule_set": ["geoip-cn", "geosite-cn"],
-                "outbound": "direct"
-            },
-            {
                 "rule_set": ["geosite-category-ads-all"],
                 "outbound": "block"
             },
@@ -308,6 +330,10 @@ install_sing_box() {
             {
                 "rule_set": ["geosite-category-media"],
                 "outbound": "direct_ipv6_only"
+            },
+            {
+                "rule_set": ["geoip-cn", "geosite-cn"],
+                "outbound": "direct"
             }
         ],
         "rule_set": [
