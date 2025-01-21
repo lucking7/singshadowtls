@@ -220,6 +220,12 @@ install_sing_box() {
                 "strategy": "prefer_ipv4"
             },
             {
+                "tag": "dns_google",
+                "address": "https://dns.google/dns-query",
+                "address_resolver": "dns_resolver",
+                "strategy": "prefer_ipv4"
+            },
+            {
                 "tag": "dns_cn",
                 "address": "https://dns.pub/dns-query",
                 "address_resolver": "dns_resolver",
@@ -233,16 +239,28 @@ install_sing_box() {
         ],
         "rules": [
             {
-                "outbound": "any",
-                "server": "dns_resolver"
+                "protocol": "dns",
+                "action": "hijack-dns"
+            },
+            {
+                "rule_set": ["geosite-cn"],
+                "action": "route",
+                "server": "dns_cn",
+                "disable_cache": false,
+                "rewrite_ttl": 300
             }
         ],
         "strategy": "prefer_ipv4",
-        "independent_cache": true
+        "independent_cache": true,
+        "disable_cache": false,
+        "disable_expire": false,
+        "cache_capacity": 8192,
+        "reverse_mapping": true
     },
     "inbounds": [
         {
             "type": "shadowtls",
+            "tag": "shadowtls-in",
             "listen": "::",
             "listen_port": $port,
             "version": 3,
@@ -253,10 +271,16 @@ install_sing_box() {
             ],
             "handshake": {
                 "server": "$proxysite",
-                "server_port": 443
+                "server_port": 443,
+                "alpn": ["h2", "http/1.1"]
             },
-            "detour": "shadowsocks-in",
-            "strict_mode": true
+            "strict_mode": true,
+            "tls": {
+                "enabled": true,
+                "server_name": "$proxysite",
+                "alpn": ["h2", "http/1.1"]
+            },
+            "detour": "shadowsocks-in"
         },
         {
             "type": "shadowsocks",
@@ -264,21 +288,14 @@ install_sing_box() {
             "listen": "::",
             "listen_port": $ss_port,
             "method": "$ss_method",
-            "password": "$ss_pwd"
+            "password": "$ss_pwd",
+            "network": "tcp,udp"
         }
     ],
     "outbounds": [
         {
             "type": "direct",
             "tag": "direct"
-        },
-        {
-            "type": "block",
-            "tag": "block"
-        },
-        {
-            "type": "dns",
-            "tag": "dns-out"
         },
         {
             "type": "direct",
@@ -305,34 +322,45 @@ install_sing_box() {
         "rules": [
             {
                 "protocol": "dns",
-                "outbound": "dns-out"
+                "action": "sniff"
             },
             {
                 "rule_set": ["geosite-category-ads-all"],
-                "outbound": "block"
+                "action": "reject"
             },
             {
                 "rule_set": ["geosite-ai"],
+                "action": "route",
+                "outbound": "direct_ipv4_only"
+            },
+            {
+                "rule_set": ["geosite-openai"],
+                "action": "route",
                 "outbound": "direct_ipv4_only"
             },
             {
                 "rule_set": ["geosite-google"],
+                "action": "route",
                 "outbound": "direct_ipv6_only"
             },
             {
                 "rule_set": ["geosite-netflix"],
+                "action": "route",
                 "outbound": "direct_ipv6_only"
             },
             {
                 "rule_set": ["geosite-disney"],
+                "action": "route",
                 "outbound": "direct_ipv6_only"
             },
             {
                 "rule_set": ["geosite-category-media"],
+                "action": "route",
                 "outbound": "direct_ipv6_only"
             },
             {
                 "rule_set": ["geoip-cn", "geosite-cn"],
+                "action": "route",
                 "outbound": "direct"
             }
         ],
@@ -341,56 +369,63 @@ install_sing_box() {
                 "tag": "geoip-cn",
                 "type": "remote",
                 "format": "binary",
-                "url": "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs",
+                "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geoip/cn.srs",
                 "download_detour": "direct"
             },
             {
                 "tag": "geosite-cn",
                 "type": "remote",
                 "format": "binary",
-                "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs",
+                "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/cn.srs",
                 "download_detour": "direct"
             },
             {
                 "tag": "geosite-category-ads-all",
                 "type": "remote",
                 "format": "binary",
-                "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs",
+                "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/category-ads-all.srs",
                 "download_detour": "direct"
             },
             {
                 "tag": "geosite-ai",
                 "type": "remote",
                 "format": "binary",
-                "url": "https://github.com/MetaCubeX/meta-rules-dat/raw/sing/geo/geoip/ai.srs",
+                "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/ai.srs",
+                "download_detour": "direct"
+            },
+            {
+                "tag": "geosite-openai",
+                "type": "remote",
+                "format": "binary",
+                "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/openai.srs",
                 "download_detour": "direct"
             },
             {
                 "tag": "geosite-google",
                 "type": "remote",
                 "format": "binary",
-                "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-google.srs",
+                "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/google.srs",
                 "download_detour": "direct"
             },
             {
                 "tag": "geosite-netflix",
                 "type": "remote",
                 "format": "binary",
-                "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-netflix.srs",
+                "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/netflix.srs",
                 "download_detour": "direct"
             },
             {
                 "tag": "geosite-disney",
                 "type": "remote",
                 "format": "binary",
-                "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-disney.srs",
+                "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/disney.srs",
                 "download_detour": "direct"
             },
             {
                 "tag": "geosite-category-media",
                 "type": "remote",
                 "format": "binary",
-                "url": "https://github.com/MetaCubeX/meta-rules-dat/raw/sing/geo/geosite/category-media.srs",
+                "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/category-media.srs",
                 "download_detour": "direct"
             }
         ],
@@ -401,7 +436,8 @@ install_sing_box() {
         "cache_file": {
             "enabled": true,
             "path": "/etc/sing-box/cache.db",
-            "store_rdrc": true
+            "store_rdrc": true,
+            "store_fakeip": true
         }
     }
 }
