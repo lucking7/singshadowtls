@@ -204,6 +204,21 @@ install_sing_box() {
     [[ -z $proxysite ]] && proxysite="weather-data.apple.com"
     echo -e "${GREEN}Using $proxysite as the fake website for Sing-box${NC}"
 
+    # 添加默认策略选择
+    echo -e "${YELLOW}Select default IPv4/IPv6 strategy:${NC}"
+    echo -e "${CYAN}1) Prefer IPv4${NC}"
+    echo -e "${CYAN}2) Prefer IPv6${NC}"
+    echo -e "${CYAN}3) IPv4 only${NC}"
+    echo -e "${CYAN}4) IPv6 only${NC}"
+    read -p "Enter your choice [1-4]: " strategy_choice
+    case "$strategy_choice" in
+        1) default_strategy="prefer_ipv4" ;;
+        2) default_strategy="prefer_ipv6" ;;
+        3) default_strategy="ipv4_only" ;;
+        4) default_strategy="ipv6_only" ;;
+        *) default_strategy="prefer_ipv4" ;;
+    esac
+
     echo -e "${BLUE}Generating configuration file...${NC}"
     cat << EOF > /etc/sing-box/config.json
 {
@@ -217,13 +232,13 @@ install_sing_box() {
                 "tag": "dns_cf",
                 "address": "https://1.1.1.1/dns-query",
                 "address_resolver": "dns_resolver",
-                "strategy": "prefer_ipv4"
+                "strategy": "$default_strategy"
             },
             {
                 "tag": "dns_google",
                 "address": "https://dns.google/dns-query",
                 "address_resolver": "dns_resolver",
-                "strategy": "prefer_ipv4"
+                "strategy": "$default_strategy"
             },
             {
                 "tag": "dns_cn",
@@ -244,18 +259,11 @@ install_sing_box() {
             },
             {
                 "rule_set": ["geosite-cn"],
-                "action": "route",
-                "server": "dns_cn",
-                "disable_cache": false,
-                "rewrite_ttl": 300
+                "server": "dns_cn"
             }
         ],
-        "strategy": "prefer_ipv4",
-        "independent_cache": true,
-        "disable_cache": false,
-        "disable_expire": false,
-        "cache_capacity": 8192,
-        "reverse_mapping": true
+        "strategy": "$default_strategy",
+        "independent_cache": true
     },
     "inbounds": [
         {
@@ -329,34 +337,29 @@ install_sing_box() {
                 "action": "reject"
             },
             {
-                "rule_set": ["geosite-ai"],
+                "rule_set": ["geosite-ai-chat-!cn"],
                 "action": "route",
-                "outbound": "direct_ipv4_only"
-            },
-            {
-                "rule_set": ["geosite-openai"],
-                "action": "route",
-                "outbound": "direct_ipv4_only"
+                "outbound": "direct_prefer_ipv4"
             },
             {
                 "rule_set": ["geosite-google"],
                 "action": "route",
-                "outbound": "direct_ipv6_only"
+                "outbound": "direct_prefer_ipv4"
             },
             {
                 "rule_set": ["geosite-netflix"],
                 "action": "route",
-                "outbound": "direct_ipv6_only"
+                "outbound": "direct_prefer_ipv6"
             },
             {
                 "rule_set": ["geosite-disney"],
                 "action": "route",
-                "outbound": "direct_ipv6_only"
+                "outbound": "direct_prefer_ipv6"
             },
             {
                 "rule_set": ["geosite-category-media"],
                 "action": "route",
-                "outbound": "direct_ipv6_only"
+                "outbound": "direct_prefer_ipv6"
             },
             {
                 "rule_set": ["geoip-cn", "geosite-cn"],
@@ -387,17 +390,10 @@ install_sing_box() {
                 "download_detour": "direct"
             },
             {
-                "tag": "geosite-ai",
+                "tag": "geosite-ai-chat-!cn",
                 "type": "remote",
                 "format": "binary",
-                "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/ai.srs",
-                "download_detour": "direct"
-            },
-            {
-                "tag": "geosite-openai",
-                "type": "remote",
-                "format": "binary",
-                "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/openai.srs",
+                "url": "https://github.com/MetaCubeX/meta-rules-dat/raw/sing/geo/geosite/category-ai-chat-!cn.srs",
                 "download_detour": "direct"
             },
             {
@@ -588,7 +584,7 @@ change_ss_method() {
 
 # Function to change routing preferences
 change_routing_preferences() {
-    local services=("AI" "Google" "Netflix" "Disney" "Media")
+    local services=("AI" "Google" "Netflix" "Disney" "Media" "All")
     local strategies=("prefer_ipv4" "prefer_ipv6" "ipv4_only" "ipv6_only")
     local outbound_map=(
         "direct_prefer_ipv4"
@@ -617,6 +613,7 @@ change_routing_preferences() {
                 "Netflix") rule_set+="netflix" ;;
                 "Disney") rule_set+="disney" ;;
                 "Media") rule_set+="category-media" ;;
+                "All") rule_set="all" ;;
             esac
 
             echo -e "${YELLOW}Select network strategy for $selected_service:${NC}"
@@ -632,15 +629,27 @@ change_routing_preferences() {
                 cp /etc/sing-box/config.json /etc/sing-box/config.json.bak
 
                 # 使用 jq 更新规则的 outbound
-                jq --arg rs "$rule_set" --arg out "$selected_outbound" '
-                .route.rules = [
-                    .route.rules[] | 
-                    if (.rule_set != null and .rule_set[0] == $rs) then
-                        . + {outbound: $out}
-                    else
-                        .
-                    end
-                ]' /etc/sing-box/config.json > /tmp/config.json
+                if [[ "$selected_service" == "All" ]]; then
+                    jq --arg out "$selected_outbound" '
+                    .route.rules = [
+                        .route.rules[] | 
+                        if (.rule_set != null) then
+                            . + {outbound: $out}
+                        else
+                            .
+                        end
+                    ]' /etc/sing-box/config.json > /tmp/config.json
+                else
+                    jq --arg rs "$rule_set" --arg out "$selected_outbound" '
+                    .route.rules = [
+                        .route.rules[] | 
+                        if (.rule_set != null and .rule_set[0] == $rs) then
+                            . + {outbound: $out}
+                        else
+                            .
+                        end
+                    ]' /etc/sing-box/config.json > /tmp/config.json
+                fi
 
                 if format_config; then
                     echo -e "${GREEN}Successfully updated network strategy for $selected_service to ${strategies[$((strategy_choice-1))]}${NC}"
@@ -648,7 +657,11 @@ change_routing_preferences() {
                     
                     # 显示当前配置
                     echo -e "\n${YELLOW}Current configuration for $selected_service:${NC}"
-                    jq --arg rs "$rule_set" '.route.rules[] | select(.rule_set != null and .rule_set[0] == $rs)' /etc/sing-box/config.json
+                    if [[ "$selected_service" == "All" ]]; then
+                        jq '.route.rules[] | select(.rule_set != null)' /etc/sing-box/config.json
+                    else
+                        jq --arg rs "$rule_set" '.route.rules[] | select(.rule_set != null and .rule_set[0] == $rs)' /etc/sing-box/config.json
+                    fi
                 else
                     echo -e "${RED}Failed to update configuration. Restoring backup.${NC}"
                     mv /etc/sing-box/config.json.bak /etc/sing-box/config.json
