@@ -284,10 +284,6 @@ install_sing_box() {
                 "server_port": 443
             },
             "strict_mode": true,
-            "tls": {
-                "enabled": true,
-                "server_name": "$proxysite"
-            },
             "detour": "shadowsocks-in"
         },
         {
