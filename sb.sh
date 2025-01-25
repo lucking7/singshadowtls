@@ -237,8 +237,8 @@ install_sing_box() {
             },
             {
                 "tag": "dns_google",
-                "address": "8.8.8.8",
-                "detour": "direct",
+                "address": "https://dns.google/dns-query",
+                "address_resolver": "dns_resolver",
                 "strategy": "$default_strategy"
             },
             {
