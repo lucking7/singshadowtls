@@ -256,7 +256,7 @@ install_sing_box() {
         "rules": [
             {
                 "protocol": "dns",
-                "action": "hijack-dns"
+                "action": "resolve"
             },
             {
                 "rule_set": ["geosite-cn"],
@@ -331,7 +331,7 @@ install_sing_box() {
         "rules": [
             {
                 "protocol": "dns",
-                "action": "sniff"
+                "action": "resolve"
             },
             {
                 "rule_set": ["geosite-category-ads-all"],
