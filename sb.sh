@@ -237,15 +237,9 @@ install_sing_box() {
             },
             {
                 "tag": "dns_google",
-                "address": "https://dns.google/dns-query",
-                "address_resolver": "dns_resolver",
+                "address": "8.8.8.8",
+                "detour": "direct",
                 "strategy": "$default_strategy"
-            },
-            {
-                "tag": "dns_cn",
-                "address": "https://dns.pub/dns-query",
-                "address_resolver": "dns_resolver",
-                "strategy": "ipv4_only"
             },
             {
                 "tag": "dns_resolver",
@@ -258,10 +252,6 @@ install_sing_box() {
                 "protocol": "dns",
                 "action": "route",
                 "server": "dns_cf"
-            },
-            {
-                "rule_set": ["geosite-cn"],
-                "server": "dns_cn"
             }
         ],
         "strategy": "$default_strategy",
@@ -292,8 +282,7 @@ install_sing_box() {
             "listen": "::",
             "listen_port": $ss_port,
             "method": "$ss_method",
-            "password": "$ss_pwd",
-            "network": "tcp,udp"
+            "password": "$ss_pwd"
         }
     ],
     "outbounds": [
@@ -360,8 +349,7 @@ install_sing_box() {
             },
             {
                 "rule_set": ["geoip-cn", "geosite-cn"],
-                "action": "route",
-                "outbound": "direct"
+                "action": "reject"
             }
         ],
         "rule_set": [
