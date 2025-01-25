@@ -144,9 +144,10 @@ install_sing_box() {
 
     ARCH=$(get_arch)
 
-    VERSION=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep tag_name | cut -d ":" -f2 | sed 's/\"//g;s/\,//g;s/\ //g;s/v//')
+    # 获取最新beta版本
+    VERSION=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases | jq -r '.[] | select(.tag_name | contains("beta")) | .tag_name' | head -n1 | sed 's/v//')
 
-    echo -e "${BLUE}Downloading and installing Sing-Box...${NC}"
+    echo -e "${BLUE}Downloading and installing Sing-Box beta ${VERSION}...${NC}"
     curl -Lo sing-box.deb "https://github.com/SagerNet/sing-box/releases/download/v${VERSION}/sing-box_${VERSION}_linux_${ARCH}.deb"
     dpkg -i sing-box.deb
     rm sing-box.deb
