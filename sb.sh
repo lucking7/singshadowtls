@@ -281,16 +281,15 @@ install_sing_box() {
             ],
             "handshake": {
                 "server": "$proxysite",
-                "server_port": 443,
-                "alpn": ["h2", "http/1.1"]
+                "server_port": 443
             },
             "strict_mode": true,
             "tls": {
                 "enabled": true,
-                "server_name": "$proxysite",
-                "alpn": ["h2", "http/1.1"]
+                "server_name": "$proxysite"
             },
-            "detour": "shadowsocks-in"
+            "
+            ": "shadowsocks-in"
         },
         {
             "type": "shadowsocks",
