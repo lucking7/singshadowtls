@@ -251,7 +251,7 @@ install_sing_box() {
             {
                 "protocol": "dns",
                 "action": "route",
-                "server": "dns_cf"
+                "outbound": "dns_cf"
             }
         ],
         "strategy": "$default_strategy",
@@ -316,7 +316,7 @@ install_sing_box() {
             {
                 "protocol": "dns",
                 "action": "route",
-                "server": "dns_cf"
+                "outbound": "dns_cf"
             },
             {
                 "rule_set": ["geosite-category-ads-all"],
