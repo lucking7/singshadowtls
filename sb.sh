@@ -251,7 +251,7 @@ install_sing_box() {
             {
                 "protocol": "dns",
                 "action": "route",
-                "outbound": "dns_cf"
+                "server": "dns_cf"
             }
         ],
         "strategy": "$default_strategy",
