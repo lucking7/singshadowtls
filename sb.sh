@@ -281,15 +281,16 @@ install_sing_box() {
             ],
             "handshake": {
                 "server": "$proxysite",
-                "server_port": 443
+                "server_port": 443,
+                "alpn": ["h2", "http/1.1"]
             },
             "strict_mode": true,
             "tls": {
                 "enabled": true,
-                "server_name": "$proxysite"
+                "server_name": "$proxysite",
+                "alpn": ["h2", "http/1.1"]
             },
-            "
-            ": "shadowsocks-in"
+            "detour": "shadowsocks-in"
         },
         {
             "type": "shadowsocks",
@@ -341,27 +342,27 @@ install_sing_box() {
             {
                 "rule_set": ["geosite-ai-chat-!cn"],
                 "action": "route",
-                "outbound": "direct_prefer_ipv4"
+                "outbound": "direct_ipv4_only"
             },
             {
                 "rule_set": ["geosite-google"],
                 "action": "route",
-                "outbound": "direct_prefer_ipv4"
+                "outbound": "direct_ipv4_only"
             },
             {
                 "rule_set": ["geosite-netflix"],
                 "action": "route",
-                "outbound": "direct_prefer_ipv6"
+                "outbound": "direct_ipv6_only"
             },
             {
                 "rule_set": ["geosite-disney"],
                 "action": "route",
-                "outbound": "direct_prefer_ipv6"
+                "outbound": "direct_ipv6_only"
             },
             {
                 "rule_set": ["geosite-category-media"],
                 "action": "route",
-                "outbound": "direct_prefer_ipv6"
+                "outbound": "direct_ipv6_only"
             },
             {
                 "rule_set": ["geoip-cn", "geosite-cn"],
