@@ -256,7 +256,8 @@ install_sing_box() {
         "rules": [
             {
                 "protocol": "dns",
-                "action": "resolve"
+                "action": "route",
+                "server": "dns_cf"
             },
             {
                 "rule_set": ["geosite-cn"],
@@ -331,7 +332,8 @@ install_sing_box() {
         "rules": [
             {
                 "protocol": "dns",
-                "action": "resolve"
+                "action": "route",
+                "server": "dns_cf"
             },
             {
                 "rule_set": ["geosite-category-ads-all"],
