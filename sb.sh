@@ -144,10 +144,10 @@ install_sing_box() {
 
     ARCH=$(get_arch)
 
-    # 获取最新beta版本
-    VERSION=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases | jq -r '.[] | select(.tag_name | contains("beta")) | .tag_name' | head -n1 | sed 's/v//')
+    # 获取最新正式版本
+    VERSION=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases | jq -r '.[] | select(.prerelease == false) | .tag_name' | head -n1 | sed 's/v//')
 
-    echo -e "${BLUE}Downloading and installing Sing-Box beta ${VERSION}...${NC}"
+    echo -e "${BLUE}Downloading and installing Sing-Box stable ${VERSION}...${NC}"
     curl -Lo sing-box.deb "https://github.com/SagerNet/sing-box/releases/download/v${VERSION}/sing-box_${VERSION}_linux_${ARCH}.deb"
     dpkg -i sing-box.deb
     rm sing-box.deb
@@ -231,21 +231,16 @@ install_sing_box() {
         "servers": [
             {
                 "tag": "dns_cf",
-                "address": "https://1.1.1.1/dns-query",
-                "address_resolver": "dns_resolver",
+                "type": "https",
+                "server": "1.1.1.1",
                 "strategy": "$default_strategy"
             },
             {
                 "tag": "dns_google",
-                "address": "https://dns.google/dns-query",
-                "address_resolver": "dns_resolver",
+                "type": "https",
+                "server": "dns.google",
                 "strategy": "$default_strategy"
             },
-            {
-                "tag": "dns_resolver",
-                "address": "1.1.1.1",
-                "detour": "direct"
-            }
         ],
         "rules": [
             {
@@ -293,25 +288,34 @@ install_sing_box() {
         {
             "type": "direct",
             "tag": "direct_prefer_ipv4",
-            "domain_strategy": "prefer_ipv4"
+            "domain_resolver": {
+                "strategy": "prefer_ipv4"
+            }
         },
         {
             "type": "direct",
             "tag": "direct_ipv4_only",
-            "domain_strategy": "ipv4_only"
+            "domain_resolver": {
+                "strategy": "ipv4_only"
+            }
         },
         {
             "type": "direct",
             "tag": "direct_prefer_ipv6",
-            "domain_strategy": "prefer_ipv6"
+            "domain_resolver": {
+                "strategy": "prefer_ipv6"
+            }
         },
         {
             "type": "direct",
             "tag": "direct_ipv6_only",
-            "domain_strategy": "ipv6_only"
+            "domain_resolver": {
+                "strategy": "ipv6_only"
+            }
         }
     ],
     "route": {
+        "default_domain_resolver": "dns_cf",
         "rules": [
             {
                 "protocol": "dns",
@@ -325,27 +329,42 @@ install_sing_box() {
             {
                 "rule_set": ["geosite-ai-chat-!cn"],
                 "action": "route",
-                "outbound": "direct_ipv4_only"
+                "outbound": "direct_ipv4_only",
+                "domain_resolver": {
+                    "strategy": "ipv4_only"
+                }
             },
             {
                 "rule_set": ["geosite-google"],
                 "action": "route",
-                "outbound": "direct_ipv4_only"
+                "outbound": "direct_ipv4_only",
+                "domain_resolver": {
+                    "strategy": "ipv4_only"
+                }
             },
             {
                 "rule_set": ["geosite-netflix"],
                 "action": "route",
-                "outbound": "direct_ipv6_only"
+                "outbound": "direct_ipv6_only",
+                "domain_resolver": {
+                    "strategy": "ipv6_only"
+                }
             },
             {
                 "rule_set": ["geosite-disney"],
                 "action": "route",
-                "outbound": "direct_ipv6_only"
+                "outbound": "direct_ipv6_only",
+                "domain_resolver": {
+                    "strategy": "ipv6_only"
+                }
             },
             {
                 "rule_set": ["geosite-category-media"],
                 "action": "route",
-                "outbound": "direct_ipv6_only"
+                "outbound": "direct_ipv6_only",
+                "domain_resolver": {
+                    "strategy": "ipv6_only"
+                }
             },
             {
                 "rule_set": ["geoip-cn", "geosite-cn"],
