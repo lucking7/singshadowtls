@@ -252,17 +252,17 @@ install_sing_box() {
     echo -e "${GREEN}Using $proxysite as the fake website for Sing-box${NC}"
 
     # 添加wildcard_sni选项
-    echo -e "${YELLOW}选择ShadowTLS wildcard SNI模式:${NC}"
-    echo -e "${CYAN}1) off: 禁用通配符SNI${NC}"
-    echo -e "${CYAN}2) authed: 已认证连接将目标改写为SNI域名:443 (推荐)${NC}"
-    echo -e "${CYAN}3) all: 所有连接均将目标改写为SNI域名:443${NC}"
-    read -p "请选择 [1-3] (默认: 2): " wildcard_sni_choice
+    echo -e "${YELLOW}Select ShadowTLS wildcard SNI mode:${NC}"
+    echo -e "${CYAN}1) off: Disable wildcard SNI${NC}"
+    echo -e "${CYAN}2) authed: Change target to SNI:443 for authenticated connections (Recommended)${NC}"
+    echo -e "${CYAN}3) all: Change target to SNI:443 for all connections${NC}"
+    read -p "Choose an option [1-3] (Default: 2): " wildcard_sni_choice
     case "$wildcard_sni_choice" in
         1) wildcard_sni="off" ;;
         3) wildcard_sni="all" ;;
         *) wildcard_sni="authed" ;;
     esac
-    echo -e "${GREEN}使用 wildcard_sni: $wildcard_sni${NC}"
+    echo -e "${GREEN}Using wildcard_sni: $wildcard_sni${NC}"
 
     # 添加默认策略选择
     echo -e "${YELLOW}Select default IPv4/IPv6 strategy:${NC}"
@@ -422,6 +422,7 @@ install_sing_box() {
                 "rule_set": ["geosite-ai-chat-!cn"],
                 "action": "direct",
                 "domain_resolver": {
+                    "server": "dns_resolver",
                     "strategy": "ipv4_only"
                 }
             },
@@ -429,6 +430,7 @@ install_sing_box() {
                 "rule_set": ["geosite-google"],
                 "action": "direct",
                 "domain_resolver": {
+                    "server": "dns_resolver",
                     "strategy": "ipv4_only"
                 }
             },
@@ -436,6 +438,7 @@ install_sing_box() {
                 "rule_set": ["geosite-netflix"],
                 "action": "direct",
                 "domain_resolver": {
+                    "server": "dns_resolver",
                     "strategy": "ipv6_only"
                 }
             },
@@ -443,6 +446,7 @@ install_sing_box() {
                 "rule_set": ["geosite-disney"],
                 "action": "direct",
                 "domain_resolver": {
+                    "server": "dns_resolver",
                     "strategy": "ipv6_only"
                 }
             },
@@ -450,6 +454,7 @@ install_sing_box() {
                 "rule_set": ["geosite-category-media"],
                 "action": "direct",
                 "domain_resolver": {
+                    "server": "dns_resolver",
                     "strategy": "ipv6_only"
                 }
             },
@@ -687,22 +692,22 @@ change_routing_preferences() {
     elif [[ $has_ipv6 -eq 1 ]]; then
         available_strategies=("ipv6_only" "prefer_ipv6")
     else # 回退或未知IP可用性，提供所有选项
-        echo -e "${YELLOW}IP v4/v6 可用性未确定，提供所有网络策略选项。${NC}"
+        echo -e "${YELLOW}IP v4/v6 availability unknown, providing all network strategy options.${NC}"
         available_strategies=("prefer_ipv4" "prefer_ipv6" "ipv4_only" "ipv6_only")
     fi 
 
     if [[ ${#available_strategies[@]} -eq 0 ]]; then
-        echo -e "${RED}没有可用的网络策略可配置。返回菜单。${NC}"
+        echo -e "${RED}No network strategies available for configuration. Returning to menu.${NC}"
         return
     fi
 
     while true; do
-        echo -e "${YELLOW}选择要修改其网络策略的服务:${NC}"
+        echo -e "${YELLOW}Select a service to modify its network strategy:${NC}"
         for i in "${!services[@]}"; do
             echo -e "${CYAN}$((i+1))) ${services[$i]}${NC}"
         done
-        echo -e "${CYAN}0) 返回上一级菜单${NC}"
-        read -p "输入您的选择 [0-${#services[@]}]: " service_choice
+        echo -e "${CYAN}0) Return to previous menu${NC}"
+        read -p "Enter your choice [0-${#services[@]}]: " service_choice
 
         if [[ $service_choice -eq 0 ]]; then
             return
@@ -719,11 +724,11 @@ change_routing_preferences() {
                 "All") rule_set="all" ;;
             esac
 
-            echo -e "${YELLOW}为 $selected_service 选择网络策略:${NC}"
+            echo -e "${YELLOW}Select network strategy for $selected_service:${NC}"
             for i in "${!available_strategies[@]}"; do
                 echo -e "${CYAN}$((i+1))) ${available_strategies[$i]}${NC}"
             done
-            read -p "输入您的选择 [1-${#available_strategies[@]}]: " strategy_choice_idx
+            read -p "Enter your choice [1-${#available_strategies[@]}]: " strategy_choice_idx
 
             if [[ "$strategy_choice_idx" -ge 1 && "$strategy_choice_idx" -le ${#available_strategies[@]} ]]; then
                 local selected_strategy=${available_strategies[$((strategy_choice_idx-1))]}
@@ -737,7 +742,7 @@ change_routing_preferences() {
                     .route.rules = [
                         .route.rules[] | 
                         if (.rule_set != null) then
-                            . + {outbound: "direct", domain_resolver: {strategy: $strategy}}
+                            . + {outbound: "direct", domain_resolver: {server: "dns_resolver", strategy: $strategy}}
                         else
                             .
                         end
@@ -747,7 +752,7 @@ change_routing_preferences() {
                     .route.rules = [
                         .route.rules[] | 
                         if (.rule_set != null and .rule_set[0] == $rs) then
-                            . + {outbound: "direct", domain_resolver: {strategy: $strategy}}
+                            . + {outbound: "direct", domain_resolver: {server: "dns_resolver", strategy: $strategy}}
                         else
                             .
                         end
@@ -755,25 +760,25 @@ change_routing_preferences() {
                 fi
 
                 if mv /tmp/config.json /etc/sing-box/config.json && format_config; then
-                    echo -e "${GREEN}成功将 $selected_service 的网络策略更新为 ${selected_strategy}${NC}"
+                    echo -e "${GREEN}Successfully updated network strategy for $selected_service to ${selected_strategy}${NC}"
                     systemctl restart sing-box
                     
                     # 显示当前配置
-                    echo -e "\n${YELLOW}$selected_service 的当前配置:${NC}"
+                    echo -e "\n${YELLOW}Current configuration for $selected_service:${NC}"
                     if [[ "$selected_service" == "All" ]]; then
                         jq '.route.rules[] | select(.rule_set != null)' /etc/sing-box/config.json
                     else
                         jq --arg rs "$rule_set" '.route.rules[] | select(.rule_set != null and .rule_set[0] == $rs)' /etc/sing-box/config.json
                     fi
                 else
-                    echo -e "${RED}更新配置失败。恢复备份。${NC}"
+                    echo -e "${RED}Failed to update configuration. Restoring backup.${NC}"
                     mv /etc/sing-box/config.json.bak /etc/sing-box/config.json
                 fi
             fi
         fi
 
         echo ""
-        read -p "按 Enter 继续..."
+        read -p "Press Enter to continue..."
     done
 }
 
@@ -781,28 +786,28 @@ change_routing_preferences() {
 change_wildcard_sni() {
     local current_wildcard_sni=$(jq -r '.inbounds[] | select(.type == "shadowtls") | .wildcard_sni' /etc/sing-box/config.json)
     
-    echo -e "${YELLOW}当前wildcard SNI模式: ${CYAN}$current_wildcard_sni${NC}"
-    echo -e "${YELLOW}选择新的ShadowTLS wildcard SNI模式:${NC}"
-    echo -e "${CYAN}1) off: 禁用通配符SNI${NC}"
-    echo -e "${CYAN}2) authed: 已认证连接将目标改写为SNI域名:443 (推荐)${NC}"
-    echo -e "${CYAN}3) all: 所有连接均将目标改写为SNI域名:443${NC}"
-    read -p "请选择 [1-3] (默认: 不变): " wildcard_sni_choice
+    echo -e "${YELLOW}Current wildcard SNI mode: ${CYAN}$current_wildcard_sni${NC}"
+    echo -e "${YELLOW}Select new ShadowTLS wildcard SNI mode:${NC}"
+    echo -e "${CYAN}1) off: Disable wildcard SNI${NC}"
+    echo -e "${CYAN}2) authed: Change target to SNI:443 for authenticated connections (Recommended)${NC}"
+    echo -e "${CYAN}3) all: Change target to SNI:443 for all connections${NC}"
+    read -p "Choose an option [1-3] (Enter to keep current): " wildcard_sni_choice
     
     case "$wildcard_sni_choice" in
         1) new_wildcard_sni="off" ;;
         2) new_wildcard_sni="authed" ;;
         3) new_wildcard_sni="all" ;;
-        *) echo -e "${YELLOW}保持不变${NC}" && return ;;
+        *) echo -e "${YELLOW}Keeping current setting${NC}" && return ;;
     esac
     
     # 使用jq修改配置文件
     jq --arg sni "$new_wildcard_sni" '.inbounds[] |= if .type == "shadowtls" then .wildcard_sni = $sni else . end' /etc/sing-box/config.json > /tmp/config.json
     
     if mv /tmp/config.json /etc/sing-box/config.json && format_config; then
-        echo -e "${GREEN}wildcard SNI模式已更改为: $new_wildcard_sni${NC}"
+        echo -e "${GREEN}Wildcard SNI mode changed to: $new_wildcard_sni${NC}"
         restart_sing_box
     else
-        echo -e "${RED}更新配置失败${NC}"
+        echo -e "${RED}Failed to update configuration${NC}"
     fi
 }
 
