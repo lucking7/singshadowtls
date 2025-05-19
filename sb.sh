@@ -328,20 +328,17 @@ install_sing_box() {
                 "tag": "dns_cf",
                 "type": "https",
                 "server": "1.1.1.1",
-                "strategy": "$default_strategy"
+                "detour": "direct"
             },
             {
                 "tag": "dns_google",
                 "type": "https",
-                "server": "dns.google",
-                "strategy": "$default_strategy"
-            }
-        ],
-        "rules": [
+                "server": "8.8.8.8",
+                "detour": "direct"
+            },
             {
-                "protocol": "dns",
-                "action": "route",
-                "server": "dns_cf"
+                "tag": "dns_resolver",
+                "type": "local"
             }
         ],
         "strategy": "$default_strategy",
@@ -379,31 +376,28 @@ install_sing_box() {
         {
             "type": "direct",
             "tag": "direct"
-        },
-        {
-            "type": "direct",
-            "tag": "direct_prefer_ipv4"
-        },
-        {
-            "type": "direct",
-            "tag": "direct_ipv4_only"
-        },
-        {
-            "type": "direct",
-            "tag": "direct_prefer_ipv6"
-        },
-        {
-            "type": "direct",
-            "tag": "direct_ipv6_only"
         }
     ],
     "route": {
-        "default_domain_resolver": "dns_cf",
+        "default_domain_resolver": {
+            "strategy": "$default_strategy"
+        },
         "rules": [
             {
-                "protocol": "dns",
-                "action": "route",
-                "outbound": "dns_cf"
+                "action": "sniff"
+            },
+            {
+                "type": "logical",
+                "mode": "or",
+                "rules": [
+                    {
+                        "port": 53
+                    },
+                    {
+                        "protocol": "dns"
+                    }
+                ],
+                "action": "hijack-dns"
             },
             {
                 "rule_set": ["geosite-category-ads-all"],
@@ -411,40 +405,35 @@ install_sing_box() {
             },
             {
                 "rule_set": ["geosite-ai-chat-!cn"],
-                "action": "route",
-                "outbound": "direct_ipv4_only",
+                "action": "direct",
                 "domain_resolver": {
                     "strategy": "ipv4_only"
                 }
             },
             {
                 "rule_set": ["geosite-google"],
-                "action": "route",
-                "outbound": "direct_ipv4_only",
+                "action": "direct",
                 "domain_resolver": {
                     "strategy": "ipv4_only"
                 }
             },
             {
                 "rule_set": ["geosite-netflix"],
-                "action": "route",
-                "outbound": "direct_ipv6_only",
+                "action": "direct",
                 "domain_resolver": {
                     "strategy": "ipv6_only"
                 }
             },
             {
                 "rule_set": ["geosite-disney"],
-                "action": "route",
-                "outbound": "direct_ipv6_only",
+                "action": "direct",
                 "domain_resolver": {
                     "strategy": "ipv6_only"
                 }
             },
             {
                 "rule_set": ["geosite-category-media"],
-                "action": "route",
-                "outbound": "direct_ipv6_only",
+                "action": "direct",
                 "domain_resolver": {
                     "strategy": "ipv6_only"
                 }
@@ -672,46 +661,33 @@ change_ss_method() {
 # Function to change routing preferences
 change_routing_preferences() {
     local services=("AI" "Google" "Netflix" "Disney" "Media" "All")
-    # Dynamically build strategies and outbound_map based on global IP availability
+    # 动态构建策略选项
     local available_strategies=()
-    local available_outbound_map=()
 
-    # Call get_ip_info if IP status is not already globally up-to-date
-    # For this script structure, assume get_ip_info has been called during install or we can call it again.
-    # To be safe, one might add a check or ensure has_ipv4/has_ipv6 are fresh.
-    # If not called recently, the global has_ipv4/has_ipv6 might be stale or unset.
-    # Let's assume for now they are correctly set if the script flow implies it (e.g. post-installation usage)
-    # If this function can be called independently, get_ip_info should be called here.
-    # For simplicity of this edit, we'll use the global has_ipv4, has_ipv6 flags.
-    # A more robust implementation would call get_ip_info here if there's doubt.
-
+    # 可以通过检查IP可用性动态调整可用策略
     if [[ $has_ipv4 -eq 1 && $has_ipv6 -eq 1 ]]; then
         available_strategies=("prefer_ipv4" "prefer_ipv6" "ipv4_only" "ipv6_only")
-        available_outbound_map=("direct_prefer_ipv4" "direct_prefer_ipv6" "direct_ipv4_only" "direct_ipv6_only")
     elif [[ $has_ipv4 -eq 1 ]]; then
         available_strategies=("ipv4_only" "prefer_ipv4")
-        available_outbound_map=("direct_ipv4_only" "direct_prefer_ipv4")
     elif [[ $has_ipv6 -eq 1 ]]; then
         available_strategies=("ipv6_only" "prefer_ipv6")
-        available_outbound_map=("direct_ipv6_only" "direct_prefer_ipv6")
-    else # Fallback or unknown IP availability, offer all
-        echo -e "${YELLOW}IP v4/v6 availability not definitively known for filtering strategies. Offering all.${NC}"
+    else # 回退或未知IP可用性，提供所有选项
+        echo -e "${YELLOW}IP v4/v6 可用性未确定，提供所有网络策略选项。${NC}"
         available_strategies=("prefer_ipv4" "prefer_ipv6" "ipv4_only" "ipv6_only")
-        available_outbound_map=("direct_prefer_ipv4" "direct_prefer_ipv6" "direct_ipv4_only" "direct_ipv6_only")
     fi 
 
     if [[ ${#available_strategies[@]} -eq 0 ]]; then
-        echo -e "${RED}No network strategies available to configure. Returning to menu.${NC}"
+        echo -e "${RED}没有可用的网络策略可配置。返回菜单。${NC}"
         return
     fi
 
     while true; do
-        echo -e "${YELLOW}Select a service to modify its network strategy:${NC}"
+        echo -e "${YELLOW}选择要修改其网络策略的服务:${NC}"
         for i in "${!services[@]}"; do
             echo -e "${CYAN}$((i+1))) ${services[$i]}${NC}"
         done
-        echo -e "${CYAN}0) Return to previous menu${NC}"
-        read -p "Enter your choice [0-${#services[@]}]: " service_choice
+        echo -e "${CYAN}0) 返回上一级菜单${NC}"
+        read -p "输入您的选择 [0-${#services[@]}]: " service_choice
 
         if [[ $service_choice -eq 0 ]]; then
             return
@@ -728,62 +704,61 @@ change_routing_preferences() {
                 "All") rule_set="all" ;;
             esac
 
-            echo -e "${YELLOW}Select network strategy for $selected_service:${NC}"
+            echo -e "${YELLOW}为 $selected_service 选择网络策略:${NC}"
             for i in "${!available_strategies[@]}"; do
                 echo -e "${CYAN}$((i+1))) ${available_strategies[$i]}${NC}"
             done
-            read -p "Enter your choice [1-${#available_strategies[@]}]: " strategy_choice_idx
+            read -p "输入您的选择 [1-${#available_strategies[@]}]: " strategy_choice_idx
 
             if [[ "$strategy_choice_idx" -ge 1 && "$strategy_choice_idx" -le ${#available_strategies[@]} ]]; then
-                local selected_outbound=${available_outbound_map[$((strategy_choice_idx-1))]}
-                local selected_strategy_name=${available_strategies[$((strategy_choice_idx-1))]}
+                local selected_strategy=${available_strategies[$((strategy_choice_idx-1))]}
                 
                 # 备份配置
                 cp /etc/sing-box/config.json /etc/sing-box/config.json.bak
 
-                # 使用 jq 更新规则的 outbound
+                # 使用 jq 更新规则的 domain_resolver.strategy
                 if [[ "$selected_service" == "All" ]]; then
-                    jq --arg out "$selected_outbound" '
+                    jq --arg strategy "$selected_strategy" '
                     .route.rules = [
                         .route.rules[] | 
                         if (.rule_set != null) then
-                            . + {outbound: $out}
+                            . + {outbound: "direct", domain_resolver: {strategy: $strategy}}
                         else
                             .
                         end
                     ]' /etc/sing-box/config.json > /tmp/config.json
                 else
-                    jq --arg rs "$rule_set" --arg out "$selected_outbound" '
+                    jq --arg rs "$rule_set" --arg strategy "$selected_strategy" '
                     .route.rules = [
                         .route.rules[] | 
                         if (.rule_set != null and .rule_set[0] == $rs) then
-                            . + {outbound: $out}
+                            . + {outbound: "direct", domain_resolver: {strategy: $strategy}}
                         else
                             .
                         end
                     ]' /etc/sing-box/config.json > /tmp/config.json
                 fi
 
-                if format_config; then
-                    echo -e "${GREEN}Successfully updated network strategy for $selected_service to ${selected_strategy_name}${NC}"
+                if mv /tmp/config.json /etc/sing-box/config.json && format_config; then
+                    echo -e "${GREEN}成功将 $selected_service 的网络策略更新为 ${selected_strategy}${NC}"
                     systemctl restart sing-box
                     
                     # 显示当前配置
-                    echo -e "\n${YELLOW}Current configuration for $selected_service:${NC}"
+                    echo -e "\n${YELLOW}$selected_service 的当前配置:${NC}"
                     if [[ "$selected_service" == "All" ]]; then
                         jq '.route.rules[] | select(.rule_set != null)' /etc/sing-box/config.json
                     else
                         jq --arg rs "$rule_set" '.route.rules[] | select(.rule_set != null and .rule_set[0] == $rs)' /etc/sing-box/config.json
                     fi
                 else
-                    echo -e "${RED}Failed to update configuration. Restoring backup.${NC}"
+                    echo -e "${RED}更新配置失败。恢复备份。${NC}"
                     mv /etc/sing-box/config.json.bak /etc/sing-box/config.json
                 fi
             fi
         fi
 
         echo ""
-        read -p "Press Enter to continue..."
+        read -p "按 Enter 继续..."
     done
 }
 
