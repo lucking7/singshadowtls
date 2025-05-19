@@ -240,7 +240,7 @@ install_sing_box() {
                 "type": "https",
                 "server": "dns.google",
                 "strategy": "$default_strategy"
-            },
+            }
         ],
         "rules": [
             {
@@ -287,31 +287,19 @@ install_sing_box() {
         },
         {
             "type": "direct",
-            "tag": "direct_prefer_ipv4",
-            "domain_resolver": {
-                "strategy": "prefer_ipv4"
-            }
+            "tag": "direct_prefer_ipv4"
         },
         {
             "type": "direct",
-            "tag": "direct_ipv4_only",
-            "domain_resolver": {
-                "strategy": "ipv4_only"
-            }
+            "tag": "direct_ipv4_only"
         },
         {
             "type": "direct",
-            "tag": "direct_prefer_ipv6",
-            "domain_resolver": {
-                "strategy": "prefer_ipv6"
-            }
+            "tag": "direct_prefer_ipv6"
         },
         {
             "type": "direct",
-            "tag": "direct_ipv6_only",
-            "domain_resolver": {
-                "strategy": "ipv6_only"
-            }
+            "tag": "direct_ipv6_only"
         }
     ],
     "route": {
