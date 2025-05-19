@@ -251,6 +251,19 @@ install_sing_box() {
     [[ -z $proxysite ]] && proxysite="weather-data.apple.com"
     echo -e "${GREEN}Using $proxysite as the fake website for Sing-box${NC}"
 
+    # 添加wildcard_sni选项
+    echo -e "${YELLOW}选择ShadowTLS wildcard SNI模式:${NC}"
+    echo -e "${CYAN}1) off: 禁用通配符SNI${NC}"
+    echo -e "${CYAN}2) authed: 已认证连接将目标改写为SNI域名:443 (推荐)${NC}"
+    echo -e "${CYAN}3) all: 所有连接均将目标改写为SNI域名:443${NC}"
+    read -p "请选择 [1-3] (默认: 2): " wildcard_sni_choice
+    case "$wildcard_sni_choice" in
+        1) wildcard_sni="off" ;;
+        3) wildcard_sni="all" ;;
+        *) wildcard_sni="authed" ;;
+    esac
+    echo -e "${GREEN}使用 wildcard_sni: $wildcard_sni${NC}"
+
     # 添加默认策略选择
     echo -e "${YELLOW}Select default IPv4/IPv6 strategy:${NC}"
     
@@ -361,6 +374,7 @@ install_sing_box() {
                 "server_port": 443
             },
             "strict_mode": true,
+            "wildcard_sni": "$wildcard_sni",
             "detour": "shadowsocks-in"
         },
         {
@@ -380,6 +394,7 @@ install_sing_box() {
     ],
     "route": {
         "default_domain_resolver": {
+            "server": "dns_resolver",
             "strategy": "$default_strategy"
         },
         "rules": [
@@ -762,6 +777,35 @@ change_routing_preferences() {
     done
 }
 
+# 添加修改wildcard_sni的函数
+change_wildcard_sni() {
+    local current_wildcard_sni=$(jq -r '.inbounds[] | select(.type == "shadowtls") | .wildcard_sni' /etc/sing-box/config.json)
+    
+    echo -e "${YELLOW}当前wildcard SNI模式: ${CYAN}$current_wildcard_sni${NC}"
+    echo -e "${YELLOW}选择新的ShadowTLS wildcard SNI模式:${NC}"
+    echo -e "${CYAN}1) off: 禁用通配符SNI${NC}"
+    echo -e "${CYAN}2) authed: 已认证连接将目标改写为SNI域名:443 (推荐)${NC}"
+    echo -e "${CYAN}3) all: 所有连接均将目标改写为SNI域名:443${NC}"
+    read -p "请选择 [1-3] (默认: 不变): " wildcard_sni_choice
+    
+    case "$wildcard_sni_choice" in
+        1) new_wildcard_sni="off" ;;
+        2) new_wildcard_sni="authed" ;;
+        3) new_wildcard_sni="all" ;;
+        *) echo -e "${YELLOW}保持不变${NC}" && return ;;
+    esac
+    
+    # 使用jq修改配置文件
+    jq --arg sni "$new_wildcard_sni" '.inbounds[] |= if .type == "shadowtls" then .wildcard_sni = $sni else . end' /etc/sing-box/config.json > /tmp/config.json
+    
+    if mv /tmp/config.json /etc/sing-box/config.json && format_config; then
+        echo -e "${GREEN}wildcard SNI模式已更改为: $new_wildcard_sni${NC}"
+        restart_sing_box
+    else
+        echo -e "${RED}更新配置失败${NC}"
+    fi
+}
+
 # Function to modify configuration
 modify_configuration() {
     while true; do
@@ -770,13 +814,15 @@ modify_configuration() {
         echo -e "${CYAN}2) Reset passwords${NC}"
         echo -e "${CYAN}3) Change Shadowsocks encryption method${NC}"
         echo -e "${CYAN}4) Change routing preferences${NC}"
+        echo -e "${CYAN}5) Change ShadowTLS wildcard SNI mode${NC}"
         echo -e "${CYAN}0) Return to main menu${NC}"
-        read -p "Enter your choice [0-4]: " confAnswer
+        read -p "Enter your choice [0-5]: " confAnswer
         case $confAnswer in
             1 ) change_port ;;
             2 ) change_passwords ;;
             3 ) change_ss_method ;;
             4 ) change_routing_preferences ;;
+            5 ) change_wildcard_sni ;;
             0 ) return ;;
             * ) echo -e "${RED}Invalid choice${NC}" ;;
         esac
