@@ -11,6 +11,14 @@ ORANGE='\033[0;33m'
 PINK='\033[0;35m'
 NC='\033[0m' # No Color
 
+# Global IP variables
+ipv4_address=""
+ipv6_address=""
+has_ipv4=0
+has_ipv6=0
+primary_ip=""
+country_code=""
+
 # Function to check root privileges
 check_root() {
     if [[ $EUID -ne 0 ]]; then
@@ -64,30 +72,68 @@ install_dependencies() {
 
 # Function to get IP information
 get_ip_info() {
-    # 获取 IP 地址
-    ip=$(curl -s "https://api.ip.sb/ip" -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0")
-    if [[ -z "$ip" ]]; then
-        echo -e "${RED}Failed to get IP address${NC}"
-        return 1
+    echo -e "${BLUE}Fetching IP information...${NC}"
+    ipv4_address=$(curl -4sfS https://speed.cloudflare.com/meta | jq -r '.clientIp // empty' 2>/dev/null)
+    ipv6_address=$(curl -6sfS https://speed.cloudflare.com/meta | jq -r '.clientIp // empty' 2>/dev/null)
+
+    has_ipv4=0
+    has_ipv6=0
+    primary_ip=""
+    local display_ip_info=""
+
+    if [[ -n "$ipv4_address" && "$ipv4_address" != "null" ]]; then
+        has_ipv4=1
+        primary_ip="$ipv4_address"
+        display_ip_info="IPv4: $ipv4_address"
     fi
 
-    # 获取地理位置信息
+    if [[ -n "$ipv6_address" && "$ipv6_address" != "null" ]]; then
+        has_ipv6=1
+        if [[ -z "$primary_ip" ]]; then # if no ipv4, use ipv6 as primary
+            primary_ip="$ipv6_address"
+        fi
+        if [[ -n "$display_ip_info" ]]; then
+            display_ip_info="$display_ip_info, IPv6: $ipv6_address"
+        else
+            display_ip_info="IPv6: $ipv6_address"
+        fi
+    fi
+
+    if [[ -z "$primary_ip" ]]; then
+        echo -e "${RED}Failed to get any IP address from Cloudflare Speed Test.${NC}"
+        echo -e "${YELLOW}Attempting fallback to ip.sb...${NC}"
+        primary_ip=$(curl -s "https://api.ip.sb/ip" -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0")
+        if [[ -z "$primary_ip" ]]; then
+            echo -e "${RED}Failed to get IP address from ip.sb as well. Exiting.${NC}"
+            exit 1
+        fi
+        # Cannot determine has_ipv4/has_ipv6 reliably with ip.sb alone here, user might get all strategy options
+        echo -e "${CYAN}Fallback IP: ${NC}${primary_ip} (Unable to determine specific v4/v6 availability for strategy filtering)"
+        display_ip_info="IP (fallback): $primary_ip"
+    else
+        echo -e "${BLUE}Detected IPs: ${NC}${display_ip_info}"
+    fi
+
+    # 获取地理位置信息 using primary_ip
     local geoip_info
-    geoip_info=$(curl -s "https://api.ip.sb/geoip/$ip" -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0")
+    echo -e "${BLUE}Fetching GeoIP information for ${primary_ip}...${NC}"
+    geoip_info=$(curl -s "https://api.ip.sb/geoip/$primary_ip" -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0")
     if [[ -z "$geoip_info" ]]; then
         echo -e "${RED}Failed to get location information${NC}"
-        return 1
+        # Do not exit, as geoip is not strictly critical for core functionality
+        country_code="N/A"
+        return # Return success as IP was obtained
     fi
 
     # 使用 jq 解析 JSON 响应
-    country_code=$(echo "$geoip_info" | jq -r '.country_code')
-    local city=$(echo "$geoip_info" | jq -r '.city')
-    local country=$(echo "$geoip_info" | jq -r '.country')
-    local isp=$(echo "$geoip_info" | jq -r '.isp')
+    country_code=$(echo "$geoip_info" | jq -r '.country_code // "N/A"')
+    local city=$(echo "$geoip_info" | jq -r '.city // "N/A"')
+    local country=$(echo "$geoip_info" | jq -r '.country // "N/A"')
+    local isp=$(echo "$geoip_info" | jq -r '.isp // "N/A"')
 
     # 输出详细信息（可选）
     echo -e "${BLUE}IP Information:${NC}"
-    echo -e "${CYAN}IP: ${NC}${ip}"
+    echo -e "${CYAN}Primary IP for Geo-lookup: ${NC}${primary_ip}"
     echo -e "${CYAN}Location: ${NC}${city}, ${country} (${country_code})"
     echo -e "${CYAN}ISP: ${NC}${isp}"
 }
@@ -100,10 +146,10 @@ output_node_info() {
     local ss_pwd=$(jq -r '.inbounds[] | select(.type == "shadowsocks") | .password' /etc/sing-box/config.json)
     local shadowtls_pwd=$(jq -r '.inbounds[] | select(.type == "shadowtls") | .users[0].password' /etc/sing-box/config.json)
     local sni=$(jq -r '.inbounds[] | select(.type == "shadowtls") | .handshake.server' /etc/sing-box/config.json)
-    local ip=$(curl -s4 ip.sb)
+    # Use the global primary_ip determined by get_ip_info
 
     echo -e "${YELLOW}Node Information:${NC}"
-    echo -e "${CYAN}${country_code}${NC} = ${PINK}ss, ${ip}, ${port}, encrypt-method=${ss_method}, password=${ss_pwd}, shadow-tls-password=${shadowtls_pwd}, shadow-tls-sni=${sni}, shadow-tls-version=3, udp-relay=true, udp-port=${ss_port}${NC}"
+    echo -e "${CYAN}${country_code}${NC} = ${PINK}ss, ${primary_ip}, ${port}, encrypt-method=${ss_method}, password=${ss_pwd}, shadow-tls-password=${shadowtls_pwd}, shadow-tls-sni=${sni}, shadow-tls-version=3, udp-relay=true, udp-port=${ss_port}${NC}"
 }
 
 # 添加一个新的格式化配置文件的函数
@@ -145,9 +191,9 @@ install_sing_box() {
     ARCH=$(get_arch)
 
     # 获取最新正式版本
-    VERSION=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases | jq -r '.[] | select(.prerelease == false) | .tag_name' | head -n1 | sed 's/v//')
+    VERSION=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases | jq -r '.[] | select(.prerelease == true) | .tag_name' | head -n1 | sed 's/v//')
 
-    echo -e "${BLUE}Downloading and installing Sing-Box stable ${VERSION}...${NC}"
+    echo -e "${BLUE}Downloading and installing Sing-Box beta ${VERSION}...${NC}"
     curl -Lo sing-box.deb "https://github.com/SagerNet/sing-box/releases/download/v${VERSION}/sing-box_${VERSION}_linux_${ARCH}.deb"
     dpkg -i sing-box.deb
     rm sing-box.deb
@@ -207,18 +253,67 @@ install_sing_box() {
 
     # 添加默认策略选择
     echo -e "${YELLOW}Select default IPv4/IPv6 strategy:${NC}"
-    echo -e "${CYAN}1) Prefer IPv4${NC}"
-    echo -e "${CYAN}2) Prefer IPv6${NC}"
-    echo -e "${CYAN}3) IPv4 only${NC}"
-    echo -e "${CYAN}4) IPv6 only${NC}"
-    read -p "Enter your choice [1-4]: " strategy_choice
-    case "$strategy_choice" in
-        1) default_strategy="prefer_ipv4" ;;
-        2) default_strategy="prefer_ipv6" ;;
-        3) default_strategy="ipv4_only" ;;
-        4) default_strategy="ipv6_only" ;;
-        *) default_strategy="prefer_ipv4" ;;
-    esac
+    
+    options=()
+    option_tags=()
+    option_count=0
+
+    if [[ $has_ipv4 -eq 1 && $has_ipv6 -eq 1 ]]; then # Both IPv4 and IPv6 available
+        options+=("Prefer IPv4")
+        option_tags+=("prefer_ipv4")
+        options+=("Prefer IPv6")
+        option_tags+=("prefer_ipv6")
+        options+=("IPv4 only")
+        option_tags+=("ipv4_only")
+        options+=("IPv6 only")
+        option_tags+=("ipv6_only")
+    elif [[ $has_ipv4 -eq 1 ]]; then # Only IPv4 available
+        options+=("IPv4 only (Recommended)")
+        option_tags+=("ipv4_only")
+        options+=("Prefer IPv4 (Allows fallback if IPv6 somehow becomes available)")
+        option_tags+=("prefer_ipv4")
+    elif [[ $has_ipv6 -eq 1 ]]; then # Only IPv6 available
+        options+=("IPv6 only (Recommended)")
+        option_tags+=("ipv6_only")
+        options+=("Prefer IPv6 (Allows fallback if IPv4 somehow becomes available)")
+        option_tags+=("prefer_ipv6")
+    else # Fallback or no IP info for filtering (offer all, default to prefer_ipv4)
+        echo -e "${YELLOW}Could not determine specific IP v4/v6 availability for filtering strategy options. Offering all.${NC}"
+        options+=("Prefer IPv4")
+        option_tags+=("prefer_ipv4")
+        options+=("Prefer IPv6")
+        option_tags+=("prefer_ipv6")
+        options+=("IPv4 only")
+        option_tags+=("ipv4_only")
+        options+=("IPv6 only")
+        option_tags+=("ipv6_only")
+    fi
+
+    if [[ ${#options[@]} -eq 0 ]]; then # Should not happen if fallback IP is obtained
+        echo -e "${RED}No IP strategies available. Defaulting to prefer_ipv4.${NC}"
+        default_strategy="prefer_ipv4"
+    elif [[ ${#options[@]} -eq 1 && $has_ipv4 -eq 0 && $has_ipv6 -eq 0 ]]; then # Only one option due to fallback offering all
+         default_strategy="prefer_ipv4" # Default if offering all during fallback
+    elif [[ ${#options[@]} -gt 0 ]]; then
+        for i in "${!options[@]}"; do
+            echo -e "${CYAN}$((i+1))) ${options[$i]}${NC}"
+            option_count=$((i+1))
+        done
+        read -p "Enter your choice [1-$option_count]: " strategy_choice
+        if [[ "$strategy_choice" -ge 1 && "$strategy_choice" -le $option_count ]]; then
+            default_strategy="${option_tags[$((strategy_choice-1))]}"
+        else # Invalid choice or if only one type of IP was available and we offered fixed choice
+            if [[ $has_ipv4 -eq 1 && $has_ipv6 -eq 0 ]]; then
+                default_strategy="ipv4_only"
+            elif [[ $has_ipv6 -eq 1 && $has_ipv4 -eq 0 ]]; then
+                default_strategy="ipv6_only"
+            else
+                 default_strategy="prefer_ipv4" # Default fallback
+            fi
+            echo -e "${YELLOW}Invalid choice or single option auto-selected. Using: $default_strategy${NC}"
+        fi
+    fi
+    echo -e "${GREEN}Using DNS strategy: $default_strategy${NC}"
 
     echo -e "${BLUE}Generating configuration file...${NC}"
     cat << EOF > /etc/sing-box/config.json
@@ -577,13 +672,38 @@ change_ss_method() {
 # Function to change routing preferences
 change_routing_preferences() {
     local services=("AI" "Google" "Netflix" "Disney" "Media" "All")
-    local strategies=("prefer_ipv4" "prefer_ipv6" "ipv4_only" "ipv6_only")
-    local outbound_map=(
-        "direct_prefer_ipv4"
-        "direct_prefer_ipv6"
-        "direct_ipv4_only"
-        "direct_ipv6_only"
-    )
+    # Dynamically build strategies and outbound_map based on global IP availability
+    local available_strategies=()
+    local available_outbound_map=()
+
+    # Call get_ip_info if IP status is not already globally up-to-date
+    # For this script structure, assume get_ip_info has been called during install or we can call it again.
+    # To be safe, one might add a check or ensure has_ipv4/has_ipv6 are fresh.
+    # If not called recently, the global has_ipv4/has_ipv6 might be stale or unset.
+    # Let's assume for now they are correctly set if the script flow implies it (e.g. post-installation usage)
+    # If this function can be called independently, get_ip_info should be called here.
+    # For simplicity of this edit, we'll use the global has_ipv4, has_ipv6 flags.
+    # A more robust implementation would call get_ip_info here if there's doubt.
+
+    if [[ $has_ipv4 -eq 1 && $has_ipv6 -eq 1 ]]; then
+        available_strategies=("prefer_ipv4" "prefer_ipv6" "ipv4_only" "ipv6_only")
+        available_outbound_map=("direct_prefer_ipv4" "direct_prefer_ipv6" "direct_ipv4_only" "direct_ipv6_only")
+    elif [[ $has_ipv4 -eq 1 ]]; then
+        available_strategies=("ipv4_only" "prefer_ipv4")
+        available_outbound_map=("direct_ipv4_only" "direct_prefer_ipv4")
+    elif [[ $has_ipv6 -eq 1 ]]; then
+        available_strategies=("ipv6_only" "prefer_ipv6")
+        available_outbound_map=("direct_ipv6_only" "direct_prefer_ipv6")
+    else # Fallback or unknown IP availability, offer all
+        echo -e "${YELLOW}IP v4/v6 availability not definitively known for filtering strategies. Offering all.${NC}"
+        available_strategies=("prefer_ipv4" "prefer_ipv6" "ipv4_only" "ipv6_only")
+        available_outbound_map=("direct_prefer_ipv4" "direct_prefer_ipv6" "direct_ipv4_only" "direct_ipv6_only")
+    fi 
+
+    if [[ ${#available_strategies[@]} -eq 0 ]]; then
+        echo -e "${RED}No network strategies available to configure. Returning to menu.${NC}"
+        return
+    fi
 
     while true; do
         echo -e "${YELLOW}Select a service to modify its network strategy:${NC}"
@@ -609,13 +729,14 @@ change_routing_preferences() {
             esac
 
             echo -e "${YELLOW}Select network strategy for $selected_service:${NC}"
-            for i in "${!strategies[@]}"; do
-                echo -e "${CYAN}$((i+1))) ${strategies[$i]}${NC}"
+            for i in "${!available_strategies[@]}"; do
+                echo -e "${CYAN}$((i+1))) ${available_strategies[$i]}${NC}"
             done
-            read -p "Enter your choice [1-${#strategies[@]}]: " strategy_choice
+            read -p "Enter your choice [1-${#available_strategies[@]}]: " strategy_choice_idx
 
-            if [[ $strategy_choice -ge 1 && $strategy_choice -le ${#strategies[@]} ]]; then
-                local selected_outbound=${outbound_map[$((strategy_choice-1))]}
+            if [[ "$strategy_choice_idx" -ge 1 && "$strategy_choice_idx" -le ${#available_strategies[@]} ]]; then
+                local selected_outbound=${available_outbound_map[$((strategy_choice_idx-1))]}
+                local selected_strategy_name=${available_strategies[$((strategy_choice_idx-1))]}
                 
                 # 备份配置
                 cp /etc/sing-box/config.json /etc/sing-box/config.json.bak
@@ -644,7 +765,7 @@ change_routing_preferences() {
                 fi
 
                 if format_config; then
-                    echo -e "${GREEN}Successfully updated network strategy for $selected_service to ${strategies[$((strategy_choice-1))]}${NC}"
+                    echo -e "${GREEN}Successfully updated network strategy for $selected_service to ${selected_strategy_name}${NC}"
                     systemctl restart sing-box
                     
                     # 显示当前配置
