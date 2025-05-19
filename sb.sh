@@ -2858,6 +2858,38 @@ remove_rule_set() {
     fi
 }
 
+# Function to configure routing rules
+configure_routing() {
+    if ! command -v sing-box >/dev/null 2>&1 || [ ! -f /etc/sing-box/config.json ]; then
+        echo -e "${RED}Sing-Box is not installed or config file is missing. Please install it first.${NC}"
+        return
+    fi
+    
+    while true; do
+        echo -e "\n${YELLOW}--- Configure Routing Rules ---${NC}"
+        echo -e "${YELLOW}Select an option:${NC}"
+        echo -e "  ${CYAN}1) List All Routing Rules${NC}"
+        echo -e "  ${CYAN}2) Add New Routing Rule${NC}"
+        echo -e "  ${CYAN}3) Remove Routing Rule${NC}"
+        echo -e "  ${CYAN}4) Change Default (Final) Outbound${NC}"
+        echo -e "  ${CYAN}5) Manage Rule Sets${NC}"
+        echo -e "  ${CYAN}0) Return to Main Menu${NC}"
+        read -p "$(echo -e "${YELLOW}Enter your choice [0-5]: ${NC}")" routing_choice
+        
+        case $routing_choice in
+            1) list_routing_rules ;;
+            2) add_routing_rule ;;
+            3) remove_routing_rule ;;
+            4) change_default_outbound ;;
+            5) manage_rule_sets ;;
+            0) return ;;
+            *) echo -e "${RED}Invalid choice. Please try again.${NC}" ;;
+        esac
+        
+        [[ "$routing_choice" != "0" ]] && read -p "$(echo -e "\n${BLUE}Press Enter to continue...${NC}")"
+    done
+}
+
 # Main menu function
 menu() {
     while true; do
