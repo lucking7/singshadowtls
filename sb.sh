@@ -546,14 +546,12 @@ EOF
             {
                 "tag": "dns_cf",
                 "type": "https",
-                "server": "1.1.1.1",
-                "detour": "direct"
+                "server": "1.1.1.1"
             },
             {
                 "tag": "dns_google",
                 "type": "https",
-                "server": "8.8.8.8",
-                "detour": "direct"
+                "server": "8.8.8.8"
             },
             {
                 "tag": "dns_resolver",
