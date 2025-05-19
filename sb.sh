@@ -1031,10 +1031,10 @@ change_ss_method() {
     fi
 }
 
-# Function to change routing preferences (DNS strategy for specific services)
+# Function to change routing preferences (DNS strategy and Outbound for specific services)
 change_routing_preferences() {
-    echo -e "\n${BLUE}--- Change Service-Specific DNS Strategy ---${NC}"
-    if [ ! -f /etc/sing-box/config.json ]; then echo -e "${RED}Error: /etc/sing-box/config.json not found.${NC}"; return; fi
+    echo -e "\n${BLUE}--- 更改服务特定路由首选项 ---${NC}"
+    if [ ! -f /etc/sing-box/config.json ]; then echo -e "${RED}错误: /etc/sing-box/config.json 未找到。${NC}"; return; fi
     get_ip_info 
 
     local services_map=(
@@ -1046,6 +1046,12 @@ change_routing_preferences() {
         "All GeoSite Rules (Use with caution)|all_geosites" 
     )
     
+    local all_outbounds=$(jq -r '.outbounds[] | .tag' /etc/sing-box/config.json 2>/dev/null)
+    if [[ -z "$all_outbounds" ]]; then
+        echo -e "${RED}错误: 配置中未定义出站连接。${NC}"
+        return
+    fi
+
     local available_strategies=()
     if [[ $has_ipv4 -eq 1 && $has_ipv6 -eq 1 ]]; then
         available_strategies=("prefer_ipv4" "prefer_ipv6" "ipv4_only" "ipv6_only")
@@ -1054,33 +1060,34 @@ change_routing_preferences() {
     elif [[ $has_ipv6 -eq 1 ]]; then
         available_strategies=("ipv6_only" "prefer_ipv6")
     else
-        echo -e "${YELLOW}Warning: IP v4/v6 availability unknown. Offering all network strategy options.${NC}"
+        echo -e "${YELLOW}警告: IP v4/v6 可用性未知。提供所有网络策略选项。${NC}"
         available_strategies=("prefer_ipv4" "prefer_ipv6" "ipv4_only" "ipv6_only")
     fi 
 
     if [[ ${#available_strategies[@]} -eq 0 ]]; then
-        echo -e "${RED}Error: No network strategies available for configuration. Returning.${NC}"
+        echo -e "${RED}错误: 没有可用的网络策略进行配置。正在返回。${NC}"
         return
     fi
 
     while true; do
-        echo -e "\n${YELLOW}Select a service category to modify its DNS strategy:${NC}"
+        echo -e "\n${YELLOW}选择要修改其路由首选项的服务类别:${NC}"
         for i in "${!services_map[@]}"; do
             local display_name=$(echo "${services_map[$i]}" | cut -d'|' -f1)
-            local current_strategy_display=""
             local rule_set_tag_jq=$(echo "${services_map[$i]}" | cut -d'|' -f2)
+            local current_settings_display=""
 
             if [[ "$rule_set_tag_jq" != "all_geosites" ]]; then
-                 current_strategy=$(jq -r --arg rs "$rule_set_tag_jq" '.route.rules[] | select(.rule_set != null and .rule_set[0] == $rs) | .domain_resolver.strategy // "N/A"' /etc/sing-box/config.json)
-                 current_strategy_display=" (Current: ${CYAN}${current_strategy}${NC})"
+                local current_strategy=$(jq -r --arg rs "$rule_set_tag_jq" '.route.rules[] | select(.rule_set != null and .rule_set[0] == $rs and .domain_resolver != null) | .domain_resolver.strategy // "N/A"' /etc/sing-box/config.json)
+                local current_outbound=$(jq -r --arg rs "$rule_set_tag_jq" '.route.rules[] | select(.rule_set != null and .rule_set[0] == $rs and .action == "route") | .outbound // "N/A"' /etc/sing-box/config.json)
+                current_settings_display=" (当前DNS策略: ${CYAN}${current_strategy}${NC}, 当前出站: ${CYAN}${current_outbound}${NC})"
             fi
-            echo -e "  ${CYAN}$((i+1))) ${display_name}${current_strategy_display}${NC}"
+            echo -e "  ${CYAN}$((i+1))) ${display_name}${current_settings_display}${NC}"
         done
-        echo -e "  ${CYAN}0) Return to Previous Menu${NC}"
-        read -p "$(echo -e "${YELLOW}Enter your choice [0-${#services_map[@]}]: ${NC}")" service_choice
+        echo -e "  ${CYAN}0) 返回上一级菜单${NC}"
+        read -p "$(echo -e "${YELLOW}输入您的选择 [0-${#services_map[@]}]: ${NC}")" service_choice
 
         if ! [[ "$service_choice" =~ ^[0-9]+$ ]] || [[ "$service_choice" -lt 0 || "$service_choice" -gt ${#services_map[@]} ]]; then
-            echo -e "${RED}Invalid choice. Try again.${NC}"
+            echo -e "${RED}无效的选择。请重试。${NC}"
             continue
         fi
         if [[ $service_choice -eq 0 ]]; then return; fi
@@ -1088,67 +1095,120 @@ change_routing_preferences() {
         local selected_service_entry=${services_map[$((service_choice-1))]}
         local service_display_name=$(echo "$selected_service_entry" | cut -d'|' -f1)
         local rule_set_tag=$(echo "$selected_service_entry" | cut -d'|' -f2)
-            
-        echo -e "\n${YELLOW}Select DNS strategy for '${service_display_name}':${NC}"
-        for i in "${!available_strategies[@]}"; do
-            echo -e "  ${CYAN}$((i+1))) ${available_strategies[$i]}${NC}"
-        done
-        echo -e "  ${CYAN}0) Cancel this change${NC}"
-        read -p "$(echo -e "${YELLOW}Enter strategy choice [0-${#available_strategies[@]}]: ${NC}")" strategy_choice_idx
+        
+        # 选择要修改的内容：DNS策略 或 出站连接
+        echo -e "\n${YELLOW}为 '${service_display_name}' 选择要修改的内容:${NC}"
+        echo -e "  ${CYAN}1) 修改DNS解析策略${NC}"
+        echo -e "  ${CYAN}2) 修改出站连接 (Outbound)${NC}"
+        echo -e "  ${CYAN}0) 取消此更改${NC}"
+        read -p "$(echo -e "${YELLOW}输入您的选择 [0-2]: ${NC}")" modification_type_choice
 
-        if ! [[ "$strategy_choice_idx" =~ ^[0-9]+$ ]] || [[ "$strategy_choice_idx" -lt 0 || "$strategy_choice_idx" -gt ${#available_strategies[@]} ]]; then
-            echo -e "${RED}Invalid strategy choice. Try again.${NC}"
+        if ! [[ "$modification_type_choice" =~ ^[0-9]+$ ]] || [[ "$modification_type_choice" -lt 0 || "$modification_type_choice" -gt 2 ]]; then
+            echo -e "${RED}无效的选择。请重试。${NC}"
             continue
         fi
-        if [[ $strategy_choice_idx -eq 0 ]]; then echo -e "${BLUE}Cancelled change for ${service_display_name}.${NC}"; continue; fi
+        if [[ $modification_type_choice -eq 0 ]]; then echo -e "${BLUE}取消了对 ${service_display_name} 的更改。${NC}"; continue; fi
 
-        local selected_strategy=${available_strategies[$((strategy_choice_idx-1))]}
-        
         cp /etc/sing-box/config.json /etc/sing-box/config.json.bak_routing
-        local jq_query
-        if [[ "$rule_set_tag" == "all_geosites" ]]; then
-            echo -e "${YELLOW}Applying strategy '${selected_strategy}' to ALL rules containing 'rule_set' field...${NC}"
-            jq_query='
-                .route.rules |= map(
-                    if (.rule_set != null) then
-                        .domain_resolver = {"server": "dns_resolver", "strategy": $new_strategy}
-                    else . end
-                )'
-        else
-            jq_query='
-                .route.rules |= map(
-                    if (.rule_set != null and .rule_set[0] == $rs_tag) then
-                         .domain_resolver = {"server": "dns_resolver", "strategy": $new_strategy}
-                    else . end
-                )'
+        local jq_query=""
+        local success_message=""
+
+        if [[ "$modification_type_choice" -eq 1 ]]; then # 修改DNS策略
+            echo -e "\n${YELLOW}为 '${service_display_name}' 选择DNS策略:${NC}"
+            for i in "${!available_strategies[@]}"; do
+                echo -e "  ${CYAN}$((i+1))) ${available_strategies[$i]}${NC}"
+            done
+            echo -e "  ${CYAN}0) 取消此更改${NC}"
+            read -p "$(echo -e "${YELLOW}输入策略选择 [0-${#available_strategies[@]}]: ${NC}")" strategy_choice_idx
+
+            if ! [[ "$strategy_choice_idx" =~ ^[0-9]+$ ]] || [[ "$strategy_choice_idx" -lt 0 || "$strategy_choice_idx" -gt ${#available_strategies[@]} ]]; then
+                echo -e "${RED}无效的策略选择。请重试。${NC}"
+                rm -f /etc/sing-box/config.json.bak_routing # 清理备份
+                continue
+            fi
+            if [[ $strategy_choice_idx -eq 0 ]]; then echo -e "${BLUE}取消了对 ${service_display_name} 的DNS策略更改。${NC}"; rm -f /etc/sing-box/config.json.bak_routing; continue; fi
+            local selected_strategy=${available_strategies[$((strategy_choice_idx-1))]}
+
+            if [[ "$rule_set_tag" == "all_geosites" ]]; then
+                echo -e "${YELLOW}将策略 '${selected_strategy}' 应用于所有包含 'rule_set' 字段的规则...${NC}"
+                jq_query='
+                    .route.rules |= map(
+                        if (.rule_set != null and .domain_resolver != null) then
+                            .domain_resolver.strategy = $new_strategy
+                        else . end
+                    )'
+            else
+                jq_query='
+                    .route.rules |= map(
+                        if (.rule_set != null and .rule_set[0] == $rs_tag and .domain_resolver != null) then
+                             .domain_resolver.strategy = $new_strategy
+                        else . end
+                    )'
+            fi
+            jq --arg rs_tag "$rule_set_tag" --arg new_strategy "$selected_strategy" "$jq_query" \
+                /etc/sing-box/config.json.bak_routing > /tmp/config.json.tmp
+            success_message="成功将 '${service_display_name}' 的DNS策略更新为 '${selected_strategy}'。"
+
+        elif [[ "$modification_type_choice" -eq 2 ]]; then # 修改出站连接
+            echo -e "\n${BLUE}可用的出站连接:${NC}"
+            echo "$all_outbounds" | nl -w2 -s') '
+            echo -e "  ${CYAN}0) 取消此更改${NC}"
+            read -p "$(echo -e "${YELLOW}为 '${service_display_name}' 选择新的出站连接 (输入编号): ${NC}")" outbound_choice_idx
+            
+            local outbound_count=$(echo "$all_outbounds" | wc -l)
+            if ! [[ "$outbound_choice_idx" =~ ^[0-9]+$ ]] || [[ "$outbound_choice_idx" -lt 0 || "$outbound_choice_idx" -gt $outbound_count ]]; then
+                echo -e "${RED}无效的出站连接选择。请重试。${NC}"
+                rm -f /etc/sing-box/config.json.bak_routing # 清理备份
+                continue
+            fi
+            if [[ $outbound_choice_idx -eq 0 ]]; then echo -e "${BLUE}取消了对 ${service_display_name} 的出站连接更改。${NC}"; rm -f /etc/sing-box/config.json.bak_routing; continue; fi
+            local selected_outbound_tag=$(echo "$all_outbounds" | sed -n "${outbound_choice_idx}p")
+
+            if [[ "$rule_set_tag" == "all_geosites" ]]; then
+                echo -e "${YELLOW}将出站连接 '${selected_outbound_tag}' 应用于所有包含 'rule_set' 字段且动作为 'route' 的规则...${NC}"
+                jq_query='
+                    .route.rules |= map(
+                        if (.rule_set != null and .action == "route") then
+                            .outbound = $new_outbound
+                        else . end
+                    )'
+            else
+                jq_query='
+                    .route.rules |= map(
+                        if (.rule_set != null and .rule_set[0] == $rs_tag and .action == "route") then
+                             .outbound = $new_outbound
+                        else . end
+                    )'
+            fi
+            jq --arg rs_tag "$rule_set_tag" --arg new_outbound "$selected_outbound_tag" "$jq_query" \
+                /etc/sing-box/config.json.bak_routing > /tmp/config.json.tmp
+            success_message="成功将 '${service_display_name}' 的出站连接更新为 '${selected_outbound_tag}'。"
         fi
 
-        jq --arg rs_tag "$rule_set_tag" --arg new_strategy "$selected_strategy" "$jq_query" \
-            /etc/sing-box/config.json.bak_routing > /tmp/config.json.tmp
-
-        if [[ $? -eq 0 ]]; then
+        if [[ $? -eq 0 && -s /tmp/config.json.tmp ]]; then # 确保jq执行成功且临时文件非空
             mv /tmp/config.json.tmp /etc/sing-box/config.json
-            echo -e "${BLUE}Formatting and validating updated configuration...${NC}"
+            echo -e "${BLUE}正在格式化和验证更新的配置...${NC}"
             if format_config; then
-                echo -e "${GREEN}Successfully updated DNS strategy for '${service_display_name}' to '${selected_strategy}'.${NC}"
+                echo -e "${GREEN}${success_message}${NC}"
                 systemctl restart sing-box
-                echo -e "\n${YELLOW}Current configuration snippet for '${service_display_name}':${NC}"
+                echo -e "\n${YELLOW}'${service_display_name}' 的当前配置摘要:${NC}"
                 if [[ "$rule_set_tag" == "all_geosites" ]]; then
-                    jq '.route.rules[] | select(.rule_set != null and .domain_resolver.strategy == $strat)' --arg strat "$selected_strategy" /etc/sing-box/config.json
+                     jq '.route.rules[] | select(.rule_set != null and (.domain_resolver.strategy == $strat or .outbound == $ob))' --arg strat "$selected_strategy" --arg ob "$selected_outbound_tag" /etc/sing-box/config.json
                 else
                     jq '.route.rules[] | select(.rule_set != null and .rule_set[0] == $rs)' --arg rs "$rule_set_tag" /etc/sing-box/config.json
                 fi
                 rm /etc/sing-box/config.json.bak_routing
             else
-                echo -e "${RED}Error: Strategy update failed due to configuration error. Restoring backup...${NC}"
+                echo -e "${RED}错误: 更新失败，因为配置错误。正在恢复备份...${NC}"
                 mv /etc/sing-box/config.json.bak_routing /etc/sing-box/config.json
                 restart_sing_box
             fi
         else
-            echo -e "${RED}Error: Failed to update routing strategy using jq.${NC}"
+            echo -e "${RED}错误: 更新路由首选项失败 (jq命令可能失败或未产生输出)。${NC}"
+            mv /etc/sing-box/config.json.bak_routing /etc/sing-box/config.json # 确保恢复
             rm -f /tmp/config.json.tmp
         fi
-        read -p "$(echo -e "\n${BLUE}Press Enter to continue...${NC}")"
+        read -p "$(echo -e "\n${BLUE}按 Enter键 继续...${NC}")"
     done
 }
 
