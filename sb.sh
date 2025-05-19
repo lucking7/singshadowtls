@@ -2008,225 +2008,63 @@ add_routing_rule() {
         return
     fi
     
-    # Select rule type
-    echo -e "${YELLOW}Select rule type:${NC}"
-    echo -e "  ${CYAN}1) Domain Rule${NC} (Match specific domains)"
-    echo -e "  ${CYAN}2) Domain Suffix Rule${NC} (Match domain endings, e.g., .com, .netflix.com)"
-    echo -e "  ${CYAN}3) Domain Keyword Rule${NC} (Match domain with keywords)"
-    echo -e "  ${CYAN}4) IP CIDR Rule${NC} (Match IP address ranges)"
-    echo -e "  ${CYAN}5) Rule Set Rule${NC} (Use predefined rule sets)"
-    echo -e "  ${CYAN}6) Logical Rule${NC} (Combine multiple conditions with AND/OR)"
-    echo -e "  ${CYAN}0) Cancel${NC}"
-    read -p "$(echo -e "${YELLOW}Enter your choice [0-6]: ${NC}")" rule_type_choice
-    
-    if [[ "$rule_type_choice" -eq 0 ]]; then
-        echo -e "${BLUE}Operation cancelled.${NC}"
+    # List available rule sets
+    local rule_sets=$(jq -r '.route.rule_set[] | .tag' /etc/sing-box/config.json 2>/dev/null)
+    if [[ -z "$rule_sets" ]]; then
+        echo -e "${RED}No rule sets defined. Add rule sets first.${NC}"
         return
     fi
     
-    # Prepare rule JSON based on type
-    local rule_json=""
+    echo -e "${BLUE}Available Rule Sets:${NC}"
+    echo "$rule_sets" | nl -w2 -s') '
+    
+    read -p "$(echo -e "${YELLOW}Enter rule set number(s) to use (comma-separated): ${NC}")" rule_set_nums
+    if [[ -z "$rule_set_nums" ]]; then
+        echo -e "${RED}No rule sets selected. Cancelling.${NC}"
+        return
+    fi
+    
+    # Convert user input to rule set tags
+    local selected_rule_sets=""
+    IFS=',' read -ra rule_set_array <<< "$rule_set_nums"
+    for num in "${rule_set_array[@]}"; do
+        if ! [[ "$num" =~ ^[0-9]+$ ]] || [[ "$num" -lt 1 ]]; then
+            echo -e "${RED}Invalid rule set number: $num. Cancelling.${NC}"
+            return
+        fi
+        
+        local rs_tag=$(echo "$rule_sets" | sed -n "${num}p")
+        if [[ -z "$rs_tag" ]]; then
+            echo -e "${RED}Rule set number $num not found. Cancelling.${NC}"
+            return
+        fi
+        
+        selected_rule_sets+="\"$rs_tag\","
+    done
+    selected_rule_sets=$(echo "$selected_rule_sets" | sed 's/,$//')
+    
+    # Create temporary file for rule JSON
     local tmp_file
     tmp_file=$(mktemp /tmp/sing-box-rule.XXXXXXXXXX.json) || { echo -e "${RED}Failed to create temp file. Exiting.${NC}"; exit 1; }
     
     # Ensure tmp_file is removed on exit or interrupt
     trap 'rm -f "$tmp_file"; trap - INT TERM EXIT' INT TERM EXIT
-
-    case $rule_type_choice in
-        1) # Domain Rule
-            read -p "$(echo -e "${YELLOW}Enter domain(s) to match (comma-separated): ${NC}")" domains
-            if [[ -z "$domains" ]]; then
-                echo -e "${RED}No domains provided. Cancelling.${NC}"
-                return
-            fi
-            # Convert comma-separated list to JSON array
-            IFS=',' read -ra domain_array <<< "$domains"
-            local domain_json=$(printf '"%s",' "${domain_array[@]}" | sed 's/,$//;s/^/[/;s/$/]/')
-            
-            # Create initial rule JSON
-            echo "{\"domain\": $domain_json}" > "$tmp_file"
-            ;;
-            
-        2) # Domain Suffix Rule
-            read -p "$(echo -e "${YELLOW}Enter domain suffix(es) to match (comma-separated, e.g., .com, .netflix.com): ${NC}")" suffixes
-            if [[ -z "$suffixes" ]]; then
-                echo -e "${RED}No suffixes provided. Cancelling.${NC}"
-                return
-            fi
-            # Convert comma-separated list to JSON array
-            IFS=',' read -ra suffix_array <<< "$suffixes"
-            local suffix_json=$(printf '"%s",' "${suffix_array[@]}" | sed 's/,$//;s/^/[/;s/$/]/')
-            
-            # Create initial rule JSON
-            echo "{\"domain_suffix\": $suffix_json}" > "$tmp_file"
-            ;;
-            
-        3) # Domain Keyword Rule
-            read -p "$(echo -e "${YELLOW}Enter domain keyword(s) to match (comma-separated): ${NC}")" keywords
-            if [[ -z "$keywords" ]]; then
-                echo -e "${RED}No keywords provided. Cancelling.${NC}"
-                return
-            fi
-            # Convert comma-separated list to JSON array
-            IFS=',' read -ra keyword_array <<< "$keywords"
-            local keyword_json=$(printf '"%s",' "${keyword_array[@]}" | sed 's/,$//;s/^/[/;s/$/]/')
-            
-            # Create initial rule JSON
-            echo "{\"domain_keyword\": $keyword_json}" > "$tmp_file"
-            ;;
-            
-        4) # IP CIDR Rule
-            read -p "$(echo -e "${YELLOW}Enter IP CIDR(s) to match (comma-separated, e.g., 192.168.1.0/24, 10.0.0.0/8): ${NC}")" cidrs
-            if [[ -z "$cidrs" ]]; then
-                echo -e "${RED}No CIDRs provided. Cancelling.${NC}"
-                return
-            fi
-            # Convert comma-separated list to JSON array
-            IFS=',' read -ra cidr_array <<< "$cidrs"
-            local cidr_json=$(printf '"%s",' "${cidr_array[@]}" | sed 's/,$//;s/^/[/;s/$/]/')
-            
-            # Create initial rule JSON
-            echo "{\"ip_cidr\": $cidr_json}" > "$tmp_file"
-            ;;
-            
-        5) # Rule Set Rule
-            # List available rule sets
-            local rule_sets=$(jq -r '.route.rule_set[] | .tag' /etc/sing-box/config.json 2>/dev/null)
-            if [[ -z "$rule_sets" ]]; then
-                echo -e "${RED}No rule sets defined. Add rule sets first.${NC}"
-                return
-            fi
-            
-            echo -e "${BLUE}Available Rule Sets:${NC}"
-            echo "$rule_sets" | nl -w2 -s') '
-            
-            read -p "$(echo -e "${YELLOW}Enter rule set number(s) to use (comma-separated): ${NC}")" rule_set_nums
-            if [[ -z "$rule_set_nums" ]]; then
-                echo -e "${RED}No rule sets selected. Cancelling.${NC}"
-                return
-            fi
-            
-            # Convert user input to rule set tags
-            local selected_rule_sets=""
-            IFS=',' read -ra rule_set_array <<< "$rule_set_nums"
-            for num in "${rule_set_array[@]}"; do
-                if ! [[ "$num" =~ ^[0-9]+$ ]] || [[ "$num" -lt 1 ]]; then
-                    echo -e "${RED}Invalid rule set number: $num. Cancelling.${NC}"
-                    return
-                fi
-                
-                local rs_tag=$(echo "$rule_sets" | sed -n "${num}p")
-                if [[ -z "$rs_tag" ]]; then
-                    echo -e "${RED}Rule set number $num not found. Cancelling.${NC}"
-                    return
-                fi
-                
-                selected_rule_sets+="\"$rs_tag\","
-            done
-            selected_rule_sets=$(echo "$selected_rule_sets" | sed 's/,$//')
-            
-            # Create initial rule JSON
-            echo "{\"rule_set\": [$selected_rule_sets]}" > "$tmp_file"
-            ;;
-            
-        6) # Logical Rule
-            echo -e "${YELLOW}Select logical operation mode:${NC}"
-            echo -e "  ${CYAN}1) AND${NC} (All conditions must match)"
-            echo -e "  ${CYAN}2) OR${NC} (Any condition can match)"
-            read -p "$(echo -e "${YELLOW}Enter choice [1-2]: ${NC}")" logical_mode
-            
-            local mode=""
-            case $logical_mode in
-                1) mode="and" ;;
-                2) mode="or" ;;
-                *) echo -e "${RED}Invalid mode. Cancelling.${NC}"; return ;;
-            esac
-            
-            # Create empty sub-rules array
-            echo "{\"type\": \"logical\", \"mode\": \"$mode\", \"rules\": []}" > "$tmp_file"
-            
-            # Add sub-rules
-            local sub_rules=0
-            while true; do
-                echo -e "\n${YELLOW}Sub-rule #$((sub_rules+1)):${NC}"
-                echo -e "${YELLOW}Select sub-rule type:${NC}"
-                echo -e "  ${CYAN}1) Domain Match${NC}"
-                echo -e "  ${CYAN}2) Domain Suffix Match${NC}"
-                echo -e "  ${CYAN}3) Domain Keyword Match${NC}"
-                echo -e "  ${CYAN}4) IP CIDR Match${NC}"
-                echo -e "  ${CYAN}5) Finish Adding Sub-rules${NC}"
-                read -p "$(echo -e "${YELLOW}Enter choice [1-5]: ${NC}")" sub_rule_type
-                
-                if [[ "$sub_rule_type" -eq 5 ]]; then
-                    break
-                fi
-                
-                if [[ "$sub_rules" -ge 10 ]]; then
-                    echo -e "${YELLOW}Maximum number of sub-rules (10) reached. Continuing to next step.${NC}"
-                    break
-                fi
-                
-                local sub_rule_json=""
-                case $sub_rule_type in
-                    1) # Domain Match
-                        read -p "$(echo -e "${YELLOW}Enter domain to match: ${NC}")" domain
-                        [[ -z "$domain" ]] && continue
-                        sub_rule_json="{\"domain\": [\"$domain\"]}"
-                        ;;
-                    2) # Domain Suffix Match
-                        read -p "$(echo -e "${YELLOW}Enter domain suffix to match: ${NC}")" suffix
-                        [[ -z "$suffix" ]] && continue
-                        sub_rule_json="{\"domain_suffix\": [\"$suffix\"]}"
-                        ;;
-                    3) # Domain Keyword Match
-                        read -p "$(echo -e "${YELLOW}Enter domain keyword to match: ${NC}")" keyword
-                        [[ -z "$keyword" ]] && continue
-                        sub_rule_json="{\"domain_keyword\": [\"$keyword\"]}"
-                        ;;
-                    4) # IP CIDR Match
-                        read -p "$(echo -e "${YELLOW}Enter IP CIDR to match: ${NC}")" cidr
-                        [[ -z "$cidr" ]] && continue
-                        sub_rule_json="{\"ip_cidr\": [\"$cidr\"]}"
-                        ;;
-                    *) echo -e "${RED}Invalid choice. Skipping this sub-rule.${NC}"; continue ;;
-                esac
-                
-                # Add the sub-rule to the logical rule
-                jq --argjson subrule "$sub_rule_json" '.rules += [$subrule]' "$tmp_file" > "$tmp_file.tmp"
-                if [[ $? -eq 0 ]]; then
-                    mv "$tmp_file.tmp" "$tmp_file"
-                    ((sub_rules++))
-                    echo -e "${GREEN}Added sub-rule. Total sub-rules: $sub_rules${NC}"
-                else
-                    echo -e "${RED}Failed to add sub-rule. Please try again.${NC}"
-                    rm -f "$tmp_file.tmp"
-                fi
-            done
-            
-            if [[ "$sub_rules" -eq 0 ]]; then
-                echo -e "${RED}No sub-rules added. Cancelling logical rule creation.${NC}"
-                rm -f "$tmp_file"
-                return
-            fi
-            ;;
-            
-        *) echo -e "${RED}Invalid choice. Cancelling.${NC}"; return ;;
-    esac
+    
+    # Create initial rule JSON with rule sets
+    echo "{\"rule_set\": [$selected_rule_sets]}" > "$tmp_file"
     
     # Choose an action for the rule
     echo -e "\n${YELLOW}Select action for this rule:${NC}"
-    echo -e "  ${CYAN}1) Direct${NC} (Use a specific outbound connection)"
-    echo -e "  ${CYAN}2) Block${NC} (Reject the connection)"
-    echo -e "  ${CYAN}3) DNS${NC} (Use specific DNS server for this rule)"
-    echo -e "  ${CYAN}4) Sniff${NC} (Traffic sniffing to detect protocol, useful for TLS)"
+    echo -e "  ${CYAN}1) Route (direct to outbound)${NC}"
+    echo -e "  ${CYAN}2) Block${NC}"
+    echo -e "  ${CYAN}3) Hijack DNS${NC}"
+    echo -e "  ${CYAN}4) Sniff${NC}"
     read -p "$(echo -e "${YELLOW}Enter your choice [1-4]: ${NC}")" action_choice
     
-    local action=""
-    local outbound_tag=""
+    local action_json=""
     
     case $action_choice in
-        1) # Direct (outbound)
-            action="outbound"
+        1) # Route action
             echo -e "\n${BLUE}Available Outbounds:${NC}"
             echo "$outbounds" | nl -w2 -s') '
             
@@ -2238,81 +2076,36 @@ add_routing_rule() {
                 return
             fi
             
-            outbound_tag=$(echo "$outbounds" | sed -n "${outbound_num}p")
+            local outbound_tag=$(echo "$outbounds" | sed -n "${outbound_num}p" | awk '{print $1}')
             
-            # Add action and outbound to the rule
-            jq --arg action "$action" --arg outbound "$outbound_tag" '. + {action: $action, outbound: $outbound}' "$tmp_file" > "$tmp_file.tmp"
-            if [[ $? -eq 0 ]]; then
-                mv "$tmp_file.tmp" "$tmp_file"
-            else
-                echo -e "${RED}Failed to add action to rule. Cancelling.${NC}"
-                rm -f "$tmp_file" "$tmp_file.tmp"
-                return
-            fi
+            # 1.11.0+ format: add action object with route action and outbound
+            action_json="{\"action\": \"route\", \"outbound\": \"$outbound_tag\"}"
             ;;
             
-        2) # Block
-            action="block"
-            # Add action to the rule
-            jq --arg action "$action" '. + {action: $action}' "$tmp_file" > "$tmp_file.tmp"
-            if [[ $? -eq 0 ]]; then
-                mv "$tmp_file.tmp" "$tmp_file"
-            else
-                echo -e "${RED}Failed to add action to rule. Cancelling.${NC}"
-                rm -f "$tmp_file" "$tmp_file.tmp"
-                return
-            fi
+        2) # Block action
+            action_json="{\"action\": \"reject\"}"
             ;;
             
-        3) # DNS
-            action="dns"
-            # List available DNS servers
-            local dns_servers=$(jq -r '.dns.servers[] | .tag' /etc/sing-box/config.json 2>/dev/null)
-            if [[ -z "$dns_servers" ]]; then
-                echo -e "${RED}No DNS servers defined in configuration. Cancelling.${NC}"
-                rm -f "$tmp_file"
-                return
-            fi
-            
-            echo -e "\n${BLUE}Available DNS Servers:${NC}"
-            echo "$dns_servers" | nl -w2 -s') '
-            
-            read -p "$(echo -e "${YELLOW}Enter the number of the DNS server to use: ${NC}")" dns_num
-            local dns_count=$(echo "$dns_servers" | wc -l)
-            if ! [[ "$dns_num" =~ ^[0-9]+$ ]] || [[ "$dns_num" -lt 1 || "$dns_num" -gt $dns_count ]]; then
-                echo -e "${RED}Invalid DNS server selection. Cancelling.${NC}"
-                rm -f "$tmp_file"
-                return
-            fi
-            
-            local dns_tag=$(echo "$dns_servers" | sed -n "${dns_num}p")
-            
-            # Add action and server to the rule
-            jq --arg action "$action" --arg server "$dns_tag" '. + {action: $action, server: $server}' "$tmp_file" > "$tmp_file.tmp"
-            if [[ $? -eq 0 ]]; then
-                mv "$tmp_file.tmp" "$tmp_file"
-            else
-                echo -e "${RED}Failed to add action to rule. Cancelling.${NC}"
-                rm -f "$tmp_file" "$tmp_file.tmp"
-                return
-            fi
+        3) # Hijack DNS action
+            action_json="{\"action\": \"hijack-dns\"}"
             ;;
             
-        4) # Sniff
-            action="sniff"
-            # Add action to the rule
-            jq --arg action "$action" '. + {action: $action}' "$tmp_file" > "$tmp_file.tmp"
-            if [[ $? -eq 0 ]]; then
-                mv "$tmp_file.tmp" "$tmp_file"
-            else
-                echo -e "${RED}Failed to add action to rule. Cancelling.${NC}"
-                rm -f "$tmp_file" "$tmp_file.tmp"
-                return
-            fi
+        4) # Sniff action
+            action_json="{\"action\": \"sniff\"}"
             ;;
             
         *) echo -e "${RED}Invalid action choice. Cancelling.${NC}"; rm -f "$tmp_file"; return ;;
     esac
+    
+    # Merge the rule with action
+    jq -s '.[0] * .[1]' "$tmp_file" <(echo "$action_json") > "$tmp_file.tmp"
+    if [[ $? -eq 0 ]]; then
+        mv "$tmp_file.tmp" "$tmp_file"
+    else
+        echo -e "${RED}Failed to add action to rule. Cancelling.${NC}"
+        rm -f "$tmp_file" "$tmp_file.tmp"
+        return
+    fi
     
     # Add the new rule to the configuration
     cp /etc/sing-box/config.json /etc/sing-box/config.json.bak_add_rule
@@ -2339,8 +2132,10 @@ add_routing_rule() {
         echo -e "${BLUE}Formatting and validating updated configuration...${NC}"
         if format_config; then
             restart_sing_box
-            echo -e "${GREEN}Successfully added new routing rule with action: $action${NC}"
-            [[ -n "$outbound_tag" ]] && echo -e "${GREEN}Rule will route traffic to outbound: $outbound_tag${NC}"
+            echo -e "${GREEN}Successfully added new routing rule with selected rule sets${NC}"
+            if [[ "$action_choice" -eq 1 ]]; then
+                echo -e "${GREEN}Rule will route traffic to outbound: $outbound_tag${NC}"
+            fi
             rm -f /etc/sing-box/config.json.bak_add_rule
         else
             echo -e "${RED}Error: Adding rule failed. Configuration validation failed. Restoring backup...${NC}"
