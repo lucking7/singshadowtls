@@ -1999,43 +1999,44 @@ change_default_outbound() {
 
 # Function to add a new routing rule
 add_routing_rule() {
-    echo -e "\n${BLUE}--- Add New Routing Rule ---${NC}"
+    echo -e "\n${BLUE}--- 添加新的路由规则 ---${NC}"
     
-    # Check if we have outbounds to use in rules
+    # 检查是否有可用的出站连接
     local outbounds=$(jq -r '.outbounds[] | .tag' /etc/sing-box/config.json 2>/dev/null)
     if [[ -z "$outbounds" ]]; then
-        echo -e "${RED}No outbounds defined. Add at least one outbound before creating routing rules.${NC}"
+        echo -e "${RED}没有定义出站连接。请先添加至少一个出站连接。${NC}"
         return
     fi
     
-    # List available rule sets
+    # 列出可用的规则集
     local rule_sets=$(jq -r '.route.rule_set[] | .tag' /etc/sing-box/config.json 2>/dev/null)
     if [[ -z "$rule_sets" ]]; then
-        echo -e "${RED}No rule sets defined. Add rule sets first.${NC}"
+        echo -e "${RED}没有定义规则集。请先添加规则集。${NC}"
         return
     fi
     
-    echo -e "${BLUE}Available Rule Sets:${NC}"
+    echo -e "${BLUE}可用的规则集:${NC}"
     echo "$rule_sets" | nl -w2 -s') '
     
-    read -p "$(echo -e "${YELLOW}Enter rule set number(s) to use (comma-separated): ${NC}")" rule_set_nums
+    # 用户选择规则集
+    read -p "$(echo -e "${YELLOW}输入要使用的规则集编号(逗号分隔多个): ${NC}")" rule_set_nums
     if [[ -z "$rule_set_nums" ]]; then
-        echo -e "${RED}No rule sets selected. Cancelling.${NC}"
+        echo -e "${RED}未选择规则集。取消操作。${NC}"
         return
     fi
     
-    # Convert user input to rule set tags
+    # 转换用户输入为规则集标签
     local selected_rule_sets=""
     IFS=',' read -ra rule_set_array <<< "$rule_set_nums"
     for num in "${rule_set_array[@]}"; do
         if ! [[ "$num" =~ ^[0-9]+$ ]] || [[ "$num" -lt 1 ]]; then
-            echo -e "${RED}Invalid rule set number: $num. Cancelling.${NC}"
+            echo -e "${RED}无效的规则集编号: $num。取消操作。${NC}"
             return
         fi
         
         local rs_tag=$(echo "$rule_sets" | sed -n "${num}p")
         if [[ -z "$rs_tag" ]]; then
-            echo -e "${RED}Rule set number $num not found. Cancelling.${NC}"
+            echo -e "${RED}找不到规则集编号 $num。取消操作。${NC}"
             return
         fi
         
@@ -2043,113 +2044,139 @@ add_routing_rule() {
     done
     selected_rule_sets=$(echo "$selected_rule_sets" | sed 's/,$//')
     
-    # Create temporary file for rule JSON
-    local tmp_file
-    tmp_file=$(mktemp /tmp/sing-box-rule.XXXXXXXXXX.json) || { echo -e "${RED}Failed to create temp file. Exiting.${NC}"; exit 1; }
+    # 准备规则JSON
+    local tmp_file=$(mktemp /tmp/sing-box-rule.XXXXXXXXXX.json) || { echo -e "${RED}无法创建临时文件。退出。${NC}"; exit 1; }
     
-    # Ensure tmp_file is removed on exit or interrupt
+    # 确保在退出或中断时删除临时文件
     trap 'rm -f "$tmp_file"; trap - INT TERM EXIT' INT TERM EXIT
     
-    # Create initial rule JSON with rule sets
+    # 创建初始规则JSON
     echo "{\"rule_set\": [$selected_rule_sets]}" > "$tmp_file"
     
-    # Choose an action for the rule
-    echo -e "\n${YELLOW}Select action for this rule:${NC}"
-    echo -e "  ${CYAN}1) Route (direct to outbound)${NC}"
-    echo -e "  ${CYAN}2) Block${NC}"
-    echo -e "  ${CYAN}3) Hijack DNS${NC}"
-    echo -e "  ${CYAN}4) Sniff${NC}"
-    read -p "$(echo -e "${YELLOW}Enter your choice [1-4]: ${NC}")" action_choice
+    # 选择规则动作
+    echo -e "\n${YELLOW}为此规则选择动作:${NC}"
+    echo -e "  ${CYAN}1) 使用特定出站连接${NC}"
+    echo -e "  ${CYAN}2) 阻止连接${NC}"
+    echo -e "  ${CYAN}3) 使用特定DNS服务器${NC}"
+    echo -e "  ${CYAN}4) 流量嗅探${NC}"
+    read -p "$(echo -e "${YELLOW}输入选择 [1-4]: ${NC}")" action_choice
     
+    local action=""
     local action_json=""
     
     case $action_choice in
-        1) # Route action
-            echo -e "\n${BLUE}Available Outbounds:${NC}"
+        1) # outbound
+            echo -e "\n${BLUE}可用的出站连接:${NC}"
             echo "$outbounds" | nl -w2 -s') '
             
-            read -p "$(echo -e "${YELLOW}Enter the number of the outbound to use: ${NC}")" outbound_num
+            read -p "$(echo -e "${YELLOW}输入要使用的出站连接编号: ${NC}")" outbound_num
             local outbound_count=$(echo "$outbounds" | wc -l)
             if ! [[ "$outbound_num" =~ ^[0-9]+$ ]] || [[ "$outbound_num" -lt 1 || "$outbound_num" -gt $outbound_count ]]; then
-                echo -e "${RED}Invalid outbound selection. Cancelling.${NC}"
+                echo -e "${RED}无效的出站连接选择。取消操作。${NC}"
                 rm -f "$tmp_file"
                 return
             fi
             
-            local outbound_tag=$(echo "$outbounds" | sed -n "${outbound_num}p" | awk '{print $1}')
+            local outbound_tag=$(echo "$outbounds" | sed -n "${outbound_num}p")
             
-            # 1.11.0+ format: add action object with route action and outbound
-            action_json="{\"action\": \"route\", \"outbound\": \"$outbound_tag\"}"
+            # 添加action字段到规则
+            action="route"
+            action_json=", \"action\": \"$action\", \"outbound\": \"$outbound_tag\""
             ;;
             
-        2) # Block action
-            action_json="{\"action\": \"reject\"}"
+        2) # block
+            action="reject"
+            action_json=", \"action\": \"$action\""
             ;;
             
-        3) # Hijack DNS action
-            action_json="{\"action\": \"hijack-dns\"}"
+        3) # DNS
+            # 列出可用的DNS服务器
+            local dns_servers=$(jq -r '.dns.servers[] | .tag' /etc/sing-box/config.json 2>/dev/null)
+            if [[ -z "$dns_servers" ]]; then
+                echo -e "${RED}配置中未定义DNS服务器。取消操作。${NC}"
+                rm -f "$tmp_file"
+                return
+            fi
+            
+            echo -e "\n${BLUE}可用的DNS服务器:${NC}"
+            echo "$dns_servers" | nl -w2 -s') '
+            
+            read -p "$(echo -e "${YELLOW}输入要使用的DNS服务器编号: ${NC}")" dns_num
+            local dns_count=$(echo "$dns_servers" | wc -l)
+            if ! [[ "$dns_num" =~ ^[0-9]+$ ]] || [[ "$dns_num" -lt 1 || "$dns_num" -gt $dns_count ]]; then
+                echo -e "${RED}无效的DNS服务器选择。取消操作。${NC}"
+                rm -f "$tmp_file"
+                return
+            fi
+            
+            local dns_tag=$(echo "$dns_servers" | sed -n "${dns_num}p")
+            
+            # 添加action和server字段到规则
+            action="dns"
+            action_json=", \"action\": \"$action\", \"server\": \"$dns_tag\""
             ;;
             
-        4) # Sniff action
-            action_json="{\"action\": \"sniff\"}"
+        4) # sniff
+            action="sniff"
+            action_json=", \"action\": \"$action\""
             ;;
             
-        *) echo -e "${RED}Invalid action choice. Cancelling.${NC}"; rm -f "$tmp_file"; return ;;
+        *) 
+            echo -e "${RED}无效的动作选择。取消操作。${NC}"
+            rm -f "$tmp_file"
+            return 
+            ;;
     esac
     
-    # Merge the rule with action
-    jq -s '.[0] * .[1]' "$tmp_file" <(echo "$action_json") > "$tmp_file.tmp"
-    if [[ $? -eq 0 ]]; then
-        mv "$tmp_file.tmp" "$tmp_file"
-    else
-        echo -e "${RED}Failed to add action to rule. Cancelling.${NC}"
-        rm -f "$tmp_file" "$tmp_file.tmp"
-        return
-    fi
+    # 更新临时文件中的规则
+    local rule_content=$(cat "$tmp_file" | sed "s/}/$action_json}/")
+    echo "$rule_content" > "$tmp_file"
     
-    # Add the new rule to the configuration
+    # 添加新规则到配置
     cp /etc/sing-box/config.json /etc/sing-box/config.json.bak_add_rule
     
-    # Check if route.rules exists, create if not
+    # 检查route.rules是否存在，如不存在则创建
     if ! jq -e '.route.rules' /etc/sing-box/config.json &>/dev/null; then
         jq '.route += {rules: []}' /etc/sing-box/config.json.bak_add_rule > /tmp/config.json.tmp
         if [[ $? -eq 0 ]]; then
             mv /tmp/config.json.tmp /etc/sing-box/config.json.bak_add_rule
         else
-            echo -e "${RED}Failed to create route.rules array. Cancelling.${NC}"
+            echo -e "${RED}无法创建route.rules数组。取消操作。${NC}"
             rm -f "$tmp_file" /tmp/config.json.tmp
             rm -f /etc/sing-box/config.json.bak_add_rule
             return
         fi
     fi
     
-    # Add the rule to the configuration
+    # 将规则添加到配置中
     local rule_from_file=$(cat "$tmp_file")
     jq --argjson new_rule "$rule_from_file" '.route.rules += [$new_rule]' /etc/sing-box/config.json.bak_add_rule > /tmp/config.json.tmp
     
     if [[ $? -eq 0 ]]; then
         mv /tmp/config.json.tmp /etc/sing-box/config.json
-        echo -e "${BLUE}Formatting and validating updated configuration...${NC}"
+        echo -e "${BLUE}正在格式化和验证更新后的配置...${NC}"
         if format_config; then
             restart_sing_box
-            echo -e "${GREEN}Successfully added new routing rule with selected rule sets${NC}"
-            if [[ "$action_choice" -eq 1 ]]; then
-                echo -e "${GREEN}Rule will route traffic to outbound: $outbound_tag${NC}"
+            echo -e "${GREEN}成功添加新的路由规则，动作: $action${NC}"
+            if [[ "$action" == "route" && -n "$outbound_tag" ]]; then
+                echo -e "${GREEN}规则将流量路由到出站连接: $outbound_tag${NC}"
+            elif [[ "$action" == "dns" && -n "$dns_tag" ]]; then
+                echo -e "${GREEN}规则将使用DNS服务器: $dns_tag${NC}"
             fi
             rm -f /etc/sing-box/config.json.bak_add_rule
         else
-            echo -e "${RED}Error: Adding rule failed. Configuration validation failed. Restoring backup...${NC}"
+            echo -e "${RED}错误: 添加规则失败。配置验证失败。恢复备份...${NC}"
             mv /etc/sing-box/config.json.bak_add_rule /etc/sing-box/config.json
             restart_sing_box
         fi
     else
-        echo -e "${RED}Error: Failed to add rule to configuration using jq.${NC}"
+        echo -e "${RED}错误: 使用jq添加规则到配置失败。${NC}"
         rm -f /tmp/config.json.tmp
     fi
     
-    # Clean up at the end of the function, trap will also handle it but good for explicit cleanup
+    # 清理临时文件
     rm -f "$tmp_file"
-    trap - INT TERM EXIT # Clear the trap
+    trap - INT TERM EXIT # 清除trap
 }
 
 # Function to remove a routing rule
