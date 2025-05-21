@@ -9,7 +9,6 @@ MAGENTA='\033[0;35m'
 CYAN='\033[0;36m'
 ORANGE='\033[0;33m'
 PINK='\033[0;35m'
-GRAY='\033[0;90m' # Added Gray for disabled menu items
 NC='\033[0m' # No Color
 
 # Global IP variables
@@ -151,6 +150,17 @@ output_node_info() {
         return 1
     fi
 
+    # Check if ShadowTLS is configured
+    local shadowtls_inbound_exists
+    shadowtls_inbound_exists=$(jq -e '.inbounds[] | select(.type == "shadowtls")' /etc/sing-box/config.json >/dev/null 2>&1; echo $?)
+
+    local primary_ss_port # This will be the public port for SS if no STLS, or internal SS port if STLS exists
+    primary_ss_port=$(jq -r '.inbounds[] | select(.type == "shadowsocks") | .listen_port' /etc/sing-box/config.json)
+    local ss_method
+    ss_method=$(jq -r '.inbounds[] | select(.type == "shadowsocks") | .method' /etc/sing-box/config.json)
+    local ss_pwd
+    ss_pwd=$(jq -r '.inbounds[] | select(.type == "shadowsocks") | .password' /etc/sing-box/config.json)
+
     # Ensure country_code is available
     if [[ -z "$country_code" ]]; then 
         echo -e "${YELLOW}Country code not available, attempting to fetch IP info...${NC}"
@@ -161,29 +171,26 @@ output_node_info() {
         fi
     fi
 
-    local ss_method=$(jq -r '.inbounds[] | select(.tag == "shadowsocks-in") | .method' /etc/sing-box/config.json)
-    local ss_pwd=$(jq -r '.inbounds[] | select(.tag == "shadowsocks-in") | .password' /etc/sing-box/config.json)
-    
-    has_shadowtls_inbound=$(jq -e 'any(.inbounds[]; .type == "shadowtls")' /etc/sing-box/config.json >/dev/null 2>&1 && echo "true" || echo "false")
+    if [[ $shadowtls_inbound_exists -eq 0 ]]; then # ShadowTLS is configured
+        local stls_port
+        stls_port=$(jq -r '.inbounds[] | select(.type == "shadowtls") | .listen_port' /etc/sing-box/config.json)
+        local shadowtls_pwd
+        shadowtls_pwd=$(jq -r '.inbounds[] | select(.type == "shadowtls") | .users[0].password' /etc/sing-box/config.json)
+        local sni
+        sni=$(jq -r '.inbounds[] | select(.type == "shadowtls") | .handshake.server' /etc/sing-box/config.json)
 
-    if [[ "$has_shadowtls_inbound" == "true" ]]; then
-        local shadowtls_port=$(jq -r '.inbounds[] | select(.type == "shadowtls") | .listen_port' /etc/sing-box/config.json)
-        local shadowtls_pwd=$(jq -r '.inbounds[] | select(.type == "shadowtls") | .users[0].password' /etc/sing-box/config.json)
-        local sni=$(jq -r '.inbounds[] | select(.type == "shadowtls") | .handshake.server' /etc/sing-box/config.json)
-        # ss_port for udp-relay will be the one shadowsocks-in listens on (which is internal if shadowtls is present)
-        local ss_internal_port=$(jq -r '.inbounds[] | select(.tag == "shadowsocks-in") | .listen_port' /etc/sing-box/config.json)
-
-        echo -e "${CYAN}${country_code} [ss2022][shadow-tls-v3]${NC} = ${PINK}ss, ${primary_ip}, ${shadowtls_port}, encrypt-method=${ss_method}, password=${ss_pwd}, shadow-tls-password=${shadowtls_pwd}, shadow-tls-sni=${sni}, shadow-tls-version=3, udp-relay=true, udp-port=${ss_internal_port}${NC}"
+        # Output for ShadowTLS + Shadowsocks
+        echo -e "${CYAN}${country_code} [ss2022][shadow-tls-v3]${NC} = ${PINK}ss, ${primary_ip}, ${stls_port}, encrypt-method=${ss_method}, password=${ss_pwd}, shadow-tls-password=${shadowtls_pwd}, shadow-tls-sni=${sni}, shadow-tls-version=3, udp-relay=true, udp-port=${primary_ss_port}${NC}"
         
-        echo -e "\n${YELLOW}--- Optional: Direct Shadowsocks Node (for local network access to the SS port or other uses) ---${NC}"
-        echo -e "${CYAN}${country_code} [ss2022]${NC} = ${PINK}ss, ${primary_ip}, ${ss_internal_port}, encrypt-method=${ss_method}, password=${ss_pwd}, udp-relay=true${NC}"
-    else
-        # ShadowTLS not installed, Shadowsocks is listening on a public port
-        local ss_public_port=$(jq -r '.inbounds[] | select(.type == "shadowsocks") | .listen_port' /etc/sing-box/config.json)
-        echo -e "${CYAN}${country_code} [ss2022]${NC} = ${PINK}ss, ${primary_ip}, ${ss_public_port}, encrypt-method=${ss_method}, password=${ss_pwd}, udp-relay=true${NC}"
+        # Output for direct Shadowsocks (pointing to the internal SS port)
+        echo -e "\n${YELLOW}--- Optional: Direct Shadowsocks Node (Surge Format, internal port) ---${NC}"
+        echo -e "${CYAN}${country_code} [ss2022]${NC} = ${PINK}ss, ${primary_ip}, ${primary_ss_port}, encrypt-method=${ss_method}, password=${ss_pwd}, udp-relay=true${NC}"
+        echo -e "\n${YELLOW}Note: The 'udp-port' for the ShadowTLS node points to the direct Shadowsocks UDP port (${primary_ss_port}).${NC}"
+    else # Only Shadowsocks is configured
+        echo -e "${CYAN}${country_code} [ss2022]${NC} = ${PINK}ss, ${primary_ip}, ${primary_ss_port}, encrypt-method=${ss_method}, password=${ss_pwd}, udp-relay=true${NC}"
+        echo -e "\n${YELLOW}Note: Shadowsocks is configured to listen directly on port ${primary_ss_port}.${NC}"
     fi
-    
-    echo -e "\n${YELLOW}Note: Adapt to your client if it uses a different naming convention or parameters.${NC}"
+    echo -e "\n${YELLOW}Ensure your client supports the specified parameters and adapt if necessary.${NC}"
 }
 
 # Function to format and validate sing-box configuration
@@ -227,6 +234,17 @@ get_arch() {
 install_sing_box() {
     echo -e "\n${BLUE}====== Starting Sing-Box Installation ======${NC}"
     get_ip_info 
+
+    local install_shadowtls_choice
+    read -p "$(echo -e "${YELLOW}Do you want to install ShadowTLS v3 for obfuscation? (yes/no) [Default: yes]: ${NC}")" install_shadowtls_choice
+    install_shadowtls_choice=$(echo "$install_shadowtls_choice" | tr '[:upper:]' '[:lower:]')
+    local use_shadowtls=1 # 1 for yes, 0 for no
+    if [[ "$install_shadowtls_choice" == "no" || "$install_shadowtls_choice" == "n" ]]; then
+        use_shadowtls=0
+        echo -e "${BLUE}ShadowTLS will not be installed. Shadowsocks will be configured to listen on a public port.${NC}"
+    else
+        echo -e "${GREEN}ShadowTLS will be installed (Recommended).${NC}"
+    fi
 
     ARCH=$(get_arch)
     echo -e "${BLUE}Detected Architecture: ${CYAN}$ARCH${NC}"
@@ -311,15 +329,6 @@ install_sing_box() {
     echo -e "\n${BLUE}--- Initial Sing-Box Configuration ---${NC}"
     rm -f /etc/sing-box/config.json 
 
-    install_shadowtls_option="yes" # Default
-    read -p "$(echo -e "${YELLOW}Install ShadowTLS v3 (recommended for obfuscation)? (yes/no) [Default: yes]: ${NC}")" user_shadowtls_choice
-    if [[ "$user_shadowtls_choice" =~ ^[nN]([oO])?$ ]]; then
-        install_shadowtls_option="no"
-        echo -e "${BLUE}ShadowTLS installation will be skipped.${NC}"
-    else
-        echo -e "${BLUE}ShadowTLS will be installed.${NC}"
-    fi
-
     echo -e "\n${BLUE}--- ShadowSocks Settings ---${NC}"
     echo -e "${YELLOW}Select Shadowsocks encryption method:${NC}"
     echo -e "  ${CYAN}1) 2022-blake3-aes-128-gcm${NC}"
@@ -353,34 +362,47 @@ install_sing_box() {
     echo -e "${GREEN}Generated Shadowsocks password.${NC}"
 
     local shadowtls_pwd=""
-    local port=""
-    local ss_port="" # This will be internal if ShadowTLS is used, or public if SS only
-    local proxysite=""
-    local wildcard_sni=""
-    local shadowtls_inbound_json_segment=""
-
-    if [[ "$install_shadowtls_option" == "yes" ]]; then
+    if [[ $use_shadowtls -eq 1 ]]; then
         shadowtls_pwd=$(openssl rand -base64 32)
         echo -e "${GREEN}Generated ShadowTLS password.${NC}"
+    fi
 
-        echo -e "\n${BLUE}--- ShadowTLS Port Configuration ---${NC}"
-        read -p "$(echo -e "${YELLOW}Set ShadowTLS listening port [10000-65535] (Enter for random): ${NC}")" port
-        [[ -z $port ]] && port=$(shuf -i 10000-65535 -n 1)
-        until [[ "$port" =~ ^[0-9]+$ && "$port" -ge 10000 && "$port" -le 65535 && -z $(ss -ntlp | awk '{print $4}' | sed 's/.*://g' | grep -w "$port") ]]; do
-            echo -e "${RED}Port $port is invalid, out of range [10000-65535], or already in use.${NC}"
-            read -p "$(echo -e "${YELLOW}Set new ShadowTLS port [10000-65535] (Enter for random): ${NC}")" port
-            [[ -z $port ]] && port=$(shuf -i 10000-65535 -n 1) && echo -e "${BLUE}Random port selected: $port${NC}"
+    echo -e "\n${BLUE}--- Port Configuration ---${NC}"
+    local port="" # This will be ShadowTLS port if use_shadowtls=1, or Shadowsocks public port if use_shadowtls=0
+    local port_prompt_text=""
+
+    if [[ $use_shadowtls -eq 1 ]]; then
+        port_prompt_text="Set ShadowTLS listening port"
+    else
+        port_prompt_text="Set Shadowsocks (public) listening port"
+    fi
+
+    read -p "$(echo -e "${YELLOW}${port_prompt_text} [10000-65535] (Enter for random): ${NC}")" port
+    [[ -z $port ]] && port=$(shuf -i 10000-65535 -n 1)
+    until [[ "$port" =~ ^[0-9]+$ && "$port" -ge 10000 && "$port" -le 65535 && -z $(ss -ntlp | awk '{print $4}' | sed 's/.*://g' | grep -w "$port") ]]; do
+        echo -e "${RED}Port $port is invalid, out of range [10000-65535], or already in use.${NC}"
+        read -p "$(echo -e "${YELLOW}${port_prompt_text} [10000-65535] (Enter for random): ${NC}")" port
+        [[ -z $port ]] && port=$(shuf -i 10000-65535 -n 1) && echo -e "${BLUE}Random port selected: $port${NC}"
+    done
+    if [[ $use_shadowtls -eq 1 ]]; then
+        echo -e "${GREEN}Using new port $port for ShadowTLS.${NC}"
+    else
+        echo -e "${GREEN}Using new public port $port for Shadowsocks.${NC}"
+    fi
+    
+    local ss_port_internal="" # Internal SS port, only used if ShadowTLS is active
+    if [[ $use_shadowtls -eq 1 ]]; then
+        ss_port_internal=$(shuf -i 10000-65535 -n 1)
+        until [[ $ss_port_internal != $port && -z $(ss -ntlp | awk '{print $4}' | sed 's/.*://g' | grep -w "$ss_port_internal") ]]; do
+            ss_port_internal=$(shuf -i 10000-65535 -n 1)
         done
-        echo -e "${GREEN}Using port $port for ShadowTLS.${NC}"
+        echo -e "${GREEN}Using port $ss_port_internal for Shadowsocks (internal).${NC}"
+    fi
 
-        # Internal port for Shadowsocks when ShadowTLS is used
-        ss_port=$(shuf -i 10000-65535 -n 1)
-        until [[ $ss_port != $port && -z $(ss -ntlp | awk '{print $4}' | sed 's/.*://g' | grep -w "$ss_port") ]]; do
-            ss_port=$(shuf -i 10000-65535 -n 1)
-        done
-        echo -e "${GREEN}Using internal port $ss_port for Shadowsocks (detoured from ShadowTLS).${NC}"
-
-        echo -e "\n${BLUE}--- ShadowTLS Handshake Settings ---${NC}"
+    echo -e "\n${BLUE}--- ShadowTLS Handshake Settings ---${NC}"
+    local proxysite=""
+    local wildcard_sni=""
+    if [[ $use_shadowtls -eq 1 ]]; then
         read -p "$(echo -e "${YELLOW}Set SNI (fake website domain) for ShadowTLS (e.g., weather-data.apple.com) (Enter for default: weather-data.apple.com): ${NC}")" proxysite
         [[ -z $proxysite ]] && proxysite="weather-data.apple.com"
         echo -e "${GREEN}Using SNI: $proxysite${NC}"
@@ -396,38 +418,6 @@ install_sing_box() {
             *) wildcard_sni="authed" ;; 
         esac
         echo -e "${GREEN}Using wildcard_sni mode: $wildcard_sni${NC}"
-        
-        shadowtls_inbound_json_segment='
-        {
-            "type": "shadowtls",
-            "tag": "shadowtls-in",
-            "listen": "::",
-            "listen_port": '$port',
-            "version": 3,
-            "users": [
-                {
-                    "password": "'"$shadowtls_pwd"'"
-                }
-            ],
-            "handshake": {
-                "server": "'"$proxysite"'",
-                "server_port": 443
-            },
-            "strict_mode": true,
-            "wildcard_sni": "'"$wildcard_sni"'",
-            "detour": "shadowsocks-in"
-        },'
-    else
-        # ShadowTLS not installed, configure public port for Shadowsocks
-        echo -e "\n${BLUE}--- Shadowsocks Port Configuration ---${NC}"
-        read -p "$(echo -e "${YELLOW}Set Shadowsocks public listening port [10000-65535] (Enter for random): ${NC}")" ss_port
-        [[ -z $ss_port ]] && ss_port=$(shuf -i 10000-65535 -n 1)
-        until [[ "$ss_port" =~ ^[0-9]+$ && "$ss_port" -ge 10000 && "$ss_port" -le 65535 && -z $(ss -ntlp | awk '{print $4}' | sed 's/.*://g' | grep -w "$ss_port") ]]; do
-            echo -e "${RED}Port $ss_port is invalid, out of range [10000-65535], or already in use.${NC}"
-            read -p "$(echo -e "${YELLOW}Set new Shadowsocks public port [10000-65535] (Enter for random): ${NC}")" ss_port
-            [[ -z $ss_port ]] && ss_port=$(shuf -i 10000-65535 -n 1) && echo -e "${BLUE}Random port selected: $ss_port${NC}"
-        done
-        echo -e "${GREEN}Using public port $ss_port for Shadowsocks.${NC}"
     fi
 
     echo -e "\n${BLUE}--- DNS Strategy Configuration ---${NC}"
@@ -450,7 +440,7 @@ install_sing_box() {
         options+=("IPv6 only (Recommended)") ; option_tags+=("ipv6_only") ; default_option_idx=0
         options+=("Prefer IPv6 (Allows fallback if IPv4 becomes available later)") ; option_tags+=("prefer_ipv6")
     else 
-        echo -e "${YELLOW}Warning: IP v4/v6 availability unknown. Offering all network strategy options.${NC}"
+        echo -e "${YELLOW}Could not determine specific IP v4/v6 availability for filtering strategy options. Offering all strategies.${NC}"
         options+=("Prefer IPv4 (Default)") ; option_tags+=("prefer_ipv4") ; default_option_idx=0
         options+=("Prefer IPv6")         ; option_tags+=("prefer_ipv6")
         options+=("IPv4 only")           ; option_tags+=("ipv4_only")
@@ -504,6 +494,52 @@ install_sing_box() {
     echo -e "${GREEN}Using DNS strategy: $default_strategy${NC}"
 
     echo -e "\n${BLUE}--- Generating Configuration File ---${NC}"
+    
+    # Determine SS listen port for the config: public if no STLS, internal if STLS is used.
+    local ss_listen_port_for_config=$port 
+    if [[ $use_shadowtls -eq 1 ]]; then
+        ss_listen_port_for_config=$ss_port_internal
+    fi
+
+    # Start building inbounds JSON
+    local inbounds_json=""
+    if [[ $use_shadowtls -eq 1 ]]; then
+        inbounds_json=$(cat << INNER_EOF
+        {
+            "type": "shadowtls",
+            "tag": "shadowtls-in",
+            "listen": "::",
+            "listen_port": $port,
+            "version": 3,
+            "users": [
+                {
+                    "password": "$shadowtls_pwd"
+                }
+            ],
+            "handshake": {
+                "server": "$proxysite",
+                "server_port": 443
+            },
+            "strict_mode": true,
+            "wildcard_sni": "$wildcard_sni",
+            "detour": "shadowsocks-in"
+        },
+INNER_EOF
+)
+    fi
+
+    inbounds_json+=$(cat << INNER_EOF
+        {
+            "type": "shadowsocks",
+            "tag": "shadowsocks-in",
+            "listen": "::",
+            "listen_port": $ss_listen_port_for_config,
+            "method": "$ss_method",
+            "password": "$ss_pwd"
+        }
+INNER_EOF
+)
+
     cat << EOF > /etc/sing-box/config.json
 {
     "log": {
@@ -515,14 +551,12 @@ install_sing_box() {
             {
                 "tag": "dns_cf",
                 "type": "https",
-                "server": "1.1.1.1",
-                "detour": "direct"
+                "server": "1.1.1.1"
             },
             {
                 "tag": "dns_google",
                 "type": "https",
-                "server": "8.8.8.8",
-                "detour": "direct"
+                "server": "8.8.8.8"
             },
             {
                 "tag": "dns_resolver",
@@ -530,18 +564,24 @@ install_sing_box() {
             }
         ],
         "strategy": "$default_strategy",
-        "independent_cache": true
+        "independent_cache": true,
+        "rules": [
+            {
+                "rule_set": ["geosite-category-ads-all"],
+                "action": "reject"
+            },
+            {
+                "rule_set": ["geoip-cn", "geosite-cn"],
+                "server": "dns_cf"
+            },
+            {
+                "outbound": "any",
+                "server": "dns_google"
+            }
+        ]
     },
     "inbounds": [
-        ${shadowtls_inbound_json_segment}
-        {
-            "type": "shadowsocks",
-            "tag": "shadowsocks-in",
-            "listen": "::",
-            "listen_port": $ss_port,
-            "method": "$ss_method",
-            "password": "$ss_pwd"
-        }
+        $inbounds_json
     ],
     "outbounds": [
         {
@@ -577,7 +617,17 @@ install_sing_box() {
             },
             {
                 "rule_set": ["geosite-ai-chat-!cn"],
-                "action": "direct",
+                "action": "route",
+                "outbound": "direct",
+                "domain_resolver": {
+                    "server": "dns_resolver",
+                    "strategy": "ipv4_only"
+                }
+            },
+            {
+                "rule_set": ["geosite-google"],
+                "action": "route",
+                "outbound": "direct",
                 "domain_resolver": {
                     "server": "dns_resolver",
                     "strategy": "ipv4_only"
@@ -585,7 +635,8 @@ install_sing_box() {
             },
             {
                 "rule_set": ["geosite-netflix"],
-                "action": "direct",
+                "action": "route",
+                "outbound": "direct",
                 "domain_resolver": {
                     "server": "dns_resolver",
                     "strategy": "ipv6_only"
@@ -593,7 +644,8 @@ install_sing_box() {
             },
             {
                 "rule_set": ["geosite-disney"],
-                "action": "direct",
+                "action": "route",
+                "outbound": "direct",
                 "domain_resolver": {
                     "server": "dns_resolver",
                     "strategy": "ipv6_only"
@@ -601,7 +653,8 @@ install_sing_box() {
             },
             {
                 "rule_set": ["geosite-category-media"],
-                "action": "direct",
+                "action": "route",
+                "outbound": "direct",
                 "domain_resolver": {
                     "server": "dns_resolver",
                     "strategy": "ipv6_only"
@@ -609,23 +662,17 @@ install_sing_box() {
             },
             {
                 "rule_set": ["geosite-spotify"],
-                "action": "direct",
+                "action": "route",
+                "outbound": "direct",
                 "domain_resolver": {
                     "server": "dns_resolver",
                     "strategy": "prefer_ipv4" 
                 }
             },
             {
-                "rule_set": ["geosite-google"],
-                "action": "direct",
-                "domain_resolver": {
-                    "server": "dns_resolver",
-                    "strategy": "ipv4_only"
-                }
-            },
-            {
                 "rule_set": ["geoip-cn", "geosite-cn"],
-                "action": "direct"
+                "action": "route",
+                "outbound": "direct"
             }
         ],
         "rule_set": [
@@ -832,16 +879,23 @@ manage_sing_box() {
 # Function to change ShadowTLS port
 change_port() {
     echo -e "\n${BLUE}--- Change ShadowTLS Port ---${NC}"
-    if ! jq -e 'any(.inbounds[]; .type == "shadowtls")' /etc/sing-box/config.json >/dev/null 2>&1; then
-        echo -e "${RED}Error: ShadowTLS is not configured. This option is not applicable.${NC}"
-        return
-    fi
     if [ ! -f /etc/sing-box/config.json ]; then echo -e "${RED}Error: /etc/sing-box/config.json not found.${NC}"; return; fi
     
-    local oldport=$(jq -r '.inbounds[] | select(.type == "shadowtls") | .listen_port' /etc/sing-box/config.json)
-    echo -e "${BLUE}Current ShadowTLS port: ${CYAN}$oldport${NC}"
+    local oldport
+    local shadowtls_inbound_exists
+    shadowtls_inbound_exists=$(jq -e '.inbounds[] | select(.type == "shadowtls")' /etc/sing-box/config.json >/dev/null 2>&1; echo $?)
+
+    local port_type_string="ShadowTLS"
+    if [[ $shadowtls_inbound_exists -ne 0 ]]; then # ShadowTLS not found, so we are changing SS public port
+        port_type_string="Shadowsocks (public)"
+        oldport=$(jq -r '.inbounds[] | select(.type == "shadowsocks") | .listen_port' /etc/sing-box/config.json)
+    else
+        oldport=$(jq -r '.inbounds[] | select(.type == "shadowtls") | .listen_port' /etc/sing-box/config.json)
+    fi
     
-    read -p "$(echo -e "${YELLOW}Set new ShadowTLS port [10000-65535] (Enter for random, current: $oldport): ${NC}")" port
+    echo -e "${BLUE}Current ${port_type_string} port: ${CYAN}$oldport${NC}"
+    
+    read -p "$(echo -e "${YELLOW}Set new ${port_type_string} port [10000-65535] (Enter for random, current: $oldport): ${NC}")" port
     if [[ -z "$port" ]]; then
         port=$(shuf -i 10000-65535 -n 1)
         echo -e "${BLUE}Random port selected: $port${NC}"
@@ -849,20 +903,28 @@ change_port() {
 
     until [[ "$port" =~ ^[0-9]+$ && "$port" -ge 10000 && "$port" -le 65535 && -z $(ss -ntlp | awk '{print $4}' | sed 's/.*://g' | grep -w "$port") ]]; do
         echo -e "${RED}Port $port is invalid, out of range [10000-65535], or already in use.${NC}"
-        read -p "$(echo -e "${YELLOW}Set new ShadowTLS port [10000-65535] (Enter for random): ${NC}")" port
+        read -p "$(echo -e "${YELLOW}Set new ${port_type_string} port [10000-65535] (Enter for random): ${NC}")" port
         [[ -z $port ]] && port=$(shuf -i 10000-65535 -n 1) && echo -e "${BLUE}Random port selected: $port${NC}"
     done
-    echo -e "${GREEN}Using new port $port for ShadowTLS.${NC}"
+    echo -e "${GREEN}Using new port $port for ${port_type_string}.${NC}"
 
     cp /etc/sing-box/config.json /etc/sing-box/config.json.bak_port
-    jq --argjson newport "$port" '(.inbounds[] | select(.type == "shadowtls") | .listen_port) = $newport' /etc/sing-box/config.json.bak_port > /tmp/config.json.tmp
+    
+    local jq_filter
+    if [[ $shadowtls_inbound_exists -ne 0 ]]; then # ShadowTLS not found, update SS port
+        jq_filter='(.inbounds[] | select(.type == "shadowsocks") | .listen_port) = $newport'
+    else # ShadowTLS found, update STLS port
+        jq_filter='(.inbounds[] | select(.type == "shadowtls") | .listen_port) = $newport'
+    fi
+
+    jq --argjson newport "$port" "$jq_filter" /etc/sing-box/config.json.bak_port > /tmp/config.json.tmp
     
     if [[ $? -eq 0 ]]; then
         mv /tmp/config.json.tmp /etc/sing-box/config.json
         echo -e "${BLUE}Formatting and validating updated configuration...${NC}"
         if format_config; then
             restart_sing_box
-            echo -e "${GREEN}Sing-Box ShadowTLS port has been changed to: $port${NC}"
+            echo -e "${GREEN}Sing-Box ${port_type_string} port has been changed to: $port${NC}"
             echo -e "${YELLOW}Please update your client configuration file.${NC}"
             output_node_info
             rm /etc/sing-box/config.json.bak_port 
@@ -882,54 +944,55 @@ change_passwords() {
     echo -e "\n${BLUE}--- Reset Passwords ---${NC}"
     if [ ! -f /etc/sing-box/config.json ]; then echo -e "${RED}Error: /etc/sing-box/config.json not found.${NC}"; return; fi
 
-    has_shadowtls_inbound_for_passwd=$(jq -e 'any(.inbounds[]; .type == "shadowtls")' /etc/sing-box/config.json >/dev/null 2>&1 && echo "true" || echo "false")
-    local new_shadowtls_pwd=""
-    local jq_script=""
+    local shadowtls_inbound_exists
+    shadowtls_inbound_exists=$(jq -e '.inbounds[] | select(.type == "shadowtls")' /etc/sing-box/config.json >/dev/null 2>&1; echo $?)
+    local config_backup_file="/etc/sing-box/config.json.bak_passwd"
+    cp /etc/sing-box/config.json "$config_backup_file"
 
-    if [[ "$has_shadowtls_inbound_for_passwd" == "true" ]]; then
-        local old_shadowtls_pwd=$(jq -r '.inbounds[] | select(.type == "shadowtls") | .users[0].password' /etc/sing-box/config.json)
-        new_shadowtls_pwd=$(openssl rand -base64 32)
-        echo -e "${BLUE}New ShadowTLS password will be generated.${NC}"
-    fi
-    
-    local old_ss_pwd=$(jq -r '.inbounds[] | select(.type == "shadowsocks") | .password' /etc/sing-box/config.json)
     local new_ss_pwd
-    local current_ss_method=$(jq -r '.inbounds[] | select(.type == "shadowsocks") | .method' /etc/sing-box/config.json)
+    local current_ss_method=$(jq -r '.inbounds[] | select(.type == "shadowsocks") | .method' "$config_backup_file")
     case "$current_ss_method" in
         "2022-blake3-aes-128-gcm") new_ss_pwd=$(openssl rand -base64 16) ;;
         *) new_ss_pwd=$(openssl rand -base64 32) ;;
     esac
-    echo -e "${BLUE}New Shadowsocks password will be generated.${NC}"
+    echo -e "${GREEN}Generated new Shadowsocks password.${NC}"
 
-    echo -e "${BLUE}Updating passwords in configuration file...${NC}"
-    cp /etc/sing-box/config.json /etc/sing-box/config.json.bak_passwd
+    local jq_filter_ss='((.inbounds[] | select(.type == "shadowsocks")).password) = $new_ss_pwd'
+    local final_jq_filter=$jq_filter_ss
 
-    if [[ "$has_shadowtls_inbound_for_passwd" == "true" ]]; then
-        jq_script='((.inbounds[] | select(.type == "shadowtls") | .users[0]).password) = $new_stls_pwd | ((.inbounds[] | select(.tag == "shadowsocks-in")).password) = $new_ss_pwd'
-        jq --arg new_stls_pwd "$new_shadowtls_pwd" --arg new_ss_pwd "$new_ss_pwd" "$jq_script" /etc/sing-box/config.json.bak_passwd > /tmp/config.json.tmp
-    else
-        jq_script='((.inbounds[] | select(.tag == "shadowsocks-in")).password) = $new_ss_pwd'
-        jq --arg new_ss_pwd "$new_ss_pwd" "$jq_script" /etc/sing-box/config.json.bak_passwd > /tmp/config.json.tmp
+    if [[ $shadowtls_inbound_exists -eq 0 ]]; then # ShadowTLS is configured
+        local new_shadowtls_pwd=$(openssl rand -base64 32)
+        echo -e "${GREEN}Generated new ShadowTLS password.${NC}"
+        local jq_filter_stls='((.inbounds[] | select(.type == "shadowtls") | .users[0]).password) = $new_stls_pwd'
+        jq --arg new_stls_pwd "$new_shadowtls_pwd" --arg new_ss_pwd "$new_ss_pwd" "$jq_filter_stls | $jq_filter_ss" "$config_backup_file" > /tmp/config.json.tmp
+    else # Only Shadowsocks
+        echo -e "${YELLOW}ShadowTLS not installed, only resetting Shadowsocks password.${NC}"
+        jq --arg new_ss_pwd "$new_ss_pwd" "$jq_filter_ss" "$config_backup_file" > /tmp/config.json.tmp
     fi
-    
 
-    if [[ $? -eq 0 && -s /tmp/config.json.tmp ]]; then # Check if jq command succeeded and output file is not empty
+    if [[ $? -eq 0 ]]; then
         mv /tmp/config.json.tmp /etc/sing-box/config.json
         echo -e "${BLUE}Formatting and validating updated configuration...${NC}"
         if format_config; then
             restart_sing_box
-            echo -e "${GREEN}Sing-Box passwords have been reset.${NC}"
+            if [[ $shadowtls_inbound_exists -eq 0 ]]; then
+                 echo -e "${GREEN}Sing-Box ShadowTLS and Shadowsocks passwords have been reset.${NC}"
+            else
+                 echo -e "${GREEN}Sing-Box Shadowsocks password has been reset.${NC}"
+            fi
             echo -e "${YELLOW}Please update your client configuration file.${NC}"
             output_node_info
-            rm /etc/sing-box/config.json.bak_passwd
+            rm "$config_backup_file"
         else
             echo -e "${RED}Error: Password update failed due to configuration error. Restoring backup...${NC}"
-            mv /etc/sing-box/config.json.bak_passwd /etc/sing-box/config.json
+            mv "$config_backup_file" /etc/sing-box/config.json
             restart_sing_box 
         fi
     else
         echo -e "${RED}Error: Failed to update passwords in JSON structure using jq.${NC}"
         rm -f /tmp/config.json.tmp
+        # Restore backup if jq failed before mv
+        if [ -f "$config_backup_file" ]; then mv "$config_backup_file" /etc/sing-box/config.json; fi
     fi
 }
 
@@ -1126,13 +1189,15 @@ change_routing_preferences() {
 # Function to change ShadowTLS wildcard SNI mode
 change_wildcard_sni() {
     echo -e "\n${BLUE}--- Change ShadowTLS Wildcard SNI Mode ---${NC}"
-    if ! jq -e 'any(.inbounds[]; .type == "shadowtls")' /etc/sing-box/config.json >/dev/null 2>&1; then
-        echo -e "${RED}Error: ShadowTLS is not configured. This option is not applicable.${NC}"
-        return
-    fi
     if [ ! -f /etc/sing-box/config.json ]; then echo -e "${RED}Error: /etc/sing-box/config.json not found.${NC}"; return; fi
 
-    local current_wildcard_sni=$(jq -r '.inbounds[] | select(.type == "shadowtls") | .wildcard_sni // "not set"' /etc/sing-box/config.json)
+    local current_wildcard_sni=$(jq -r '(.inbounds[] | select(.type == "shadowtls") | .wildcard_sni) // "not_applicable"' /etc/sing-box/config.json)
+
+    if [[ "$current_wildcard_sni" == "not_applicable" ]]; then
+        echo -e "${YELLOW}ShadowTLS is not installed. Wildcard SNI mode cannot be changed.${NC}"
+        return
+    fi
+
     echo -e "${BLUE}Current wildcard SNI mode: ${CYAN}$current_wildcard_sni${NC}"
     
     echo -e "\n${YELLOW}Select new ShadowTLS wildcard SNI mode:${NC}"
@@ -1184,34 +1249,37 @@ modify_configuration() {
         echo -e "${RED}Sing-Box is not installed or config file is missing. Please install/reinstall it first.${NC}"
         return
     fi
+
+    local shadowtls_installed=0
+    jq -e '.inbounds[] | select(.type == "shadowtls")' /etc/sing-box/config.json >/dev/null 2>&1 && shadowtls_installed=1
+
     while true; do
         echo -e "\n${GREEN}--- Modify Sing-Box Configuration ---${NC}"
         echo -e "${YELLOW}Select an option to change:${NC}"
-        echo -e "  ${CYAN}1) Change ShadowTLS Port${NC}"
-        echo -e "  ${CYAN}2) Reset Passwords${NC}"
-        echo -e "  ${CYAN}3) Change Shadowsocks Encryption Method${NC}"
-        echo -e "  ${CYAN}4) Change Service-Specific DNS Strategy${NC}"
-        echo -e "  ${CYAN}5) Change ShadowTLS Wildcard SNI Mode${NC}"
-        echo -e "  ${CYAN}0) Return to Main Menu${NC}"
-        read -p "$(echo -e "${YELLOW}Enter your choice [0-5]: ${NC}")" confAnswer
+        
+        if [[ $shadowtls_installed -eq 1 ]]; then
+            echo -e "  ${CYAN}1) Change ShadowTLS Port${NC}"
+            echo -e "  ${CYAN}2) Reset Passwords (ShadowTLS & Shadowsocks)${NC}"
+            echo -e "  ${CYAN}3) Change Shadowsocks Encryption Method${NC}"
+            echo -e "  ${CYAN}4) Change Service-Specific DNS Strategy${NC}"
+            echo -e "  ${CYAN}5) Change ShadowTLS Wildcard SNI Mode${NC}"
+            echo -e "  ${CYAN}0) Return to Main Menu${NC}"
+            read -p "$(echo -e "${YELLOW}Enter your choice [0-5]: ${NC}")" confAnswer
+        else
+            echo -e "  ${CYAN}1) Change Shadowsocks Public Port${NC}"
+            echo -e "  ${CYAN}2) Reset Shadowsocks Password${NC}"
+            echo -e "  ${CYAN}3) Change Shadowsocks Encryption Method${NC}"
+            echo -e "  ${CYAN}4) Change Service-Specific DNS Strategy${NC}"
+            echo -e "  ${CYAN}0) Return to Main Menu${NC}"
+            read -p "$(echo -e "${YELLOW}Enter your choice [0-4]: ${NC}")" confAnswer
+        fi
+
         case $confAnswer in
-            1 ) 
-                if ! jq -e 'any(.inbounds[]; .type == "shadowtls")' /etc/sing-box/config.json >/dev/null 2>&1; then
-                    echo -e "${RED}ShadowTLS is not installed. This option is unavailable.${NC}"
-                else 
-                    change_port 
-                fi 
-                ;;
+            1 ) change_port ;;
             2 ) change_passwords ;;
             3 ) change_ss_method ;;
             4 ) change_routing_preferences ;;
-            5 ) 
-                if ! jq -e 'any(.inbounds[]; .type == "shadowtls")' /etc/sing-box/config.json >/dev/null 2>&1; then
-                    echo -e "${RED}ShadowTLS is not installed. This option is unavailable.${NC}"
-                else
-                    change_wildcard_sni
-                fi
-                ;;
+            5 ) if [[ $shadowtls_installed -eq 1 ]]; then change_wildcard_sni; else echo -e "${RED}Invalid option. ShadowTLS not installed.${NC}"; fi ;;
             0 ) return ;;
             * ) echo -e "${RED}Invalid choice. Please try again.${NC}" ;;
         esac
