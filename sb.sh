@@ -1093,8 +1093,34 @@ change_service_dns_strategy() {
             # Try to find the rule by the first rule_set tag if multiple exist (e.g., geoip-cn, geosite-cn)
             local first_rs_tag=$(echo "$rule_set_tag_jq" | cut -d',' -f1)
             
-            local current_strategy=$(jq -r --arg rs "$first_rs_tag" '.dns.rules[] | select(.rule_set != null and (.rule_set[0] == $rs or .rule_set == $rs)) | .strategy // "not set"' /etc/sing-box/config.json)
-            local current_server=$(jq -r --arg rs "$first_rs_tag" '.dns.rules[] | select(.rule_set != null and (.rule_set[0] == $rs or .rule_set == $rs)) | .server // "not set"' /etc/sing-box/config.json)
+            local current_strategy=$(jq -r --arg rs "$first_rs_tag" '
+                .dns.rules[] | 
+                select(
+                    .rule_set != null and (
+                        if (.rule_set | type) == "array" then 
+                            .rule_set[0] == $rs 
+                        elif (.rule_set | type) == "string" then 
+                            .rule_set == $rs 
+                        else 
+                            false 
+                        end
+                    )
+                ) | .strategy // "not set"
+            ' /etc/sing-box/config.json)
+            local current_server=$(jq -r --arg rs "$first_rs_tag" '
+                .dns.rules[] | 
+                select(
+                    .rule_set != null and (
+                        if (.rule_set | type) == "array" then 
+                            .rule_set[0] == $rs 
+                        elif (.rule_set | type) == "string" then 
+                            .rule_set == $rs 
+                        else 
+                            false 
+                        end
+                    )
+                ) | .server // "not set"
+            ' /etc/sing-box/config.json)
             echo -e "  ${CYAN}$((i+1))) ${display_name}${NC} (DNS Server: ${MAGENTA}${current_server}${NC}, Strategy: ${ORANGE}${current_strategy}${NC})"
         done
         echo -e "  ${CYAN}0) Return to Previous Menu${NC}"
@@ -1131,7 +1157,17 @@ change_service_dns_strategy() {
         # This assumes rule_set is an array or a single string.
         local jq_query='
             .dns.rules |= map(
-                if (.rule_set != null and (.rule_set[0] == $rs_tag or .rule_set == $rs_tag)) then
+                if (
+                    .rule_set != null and (
+                        if (.rule_set | type) == "array" then 
+                            .rule_set[0] == $rs_tag 
+                        elif (.rule_set | type) == "string" then 
+                            .rule_set == $rs_tag 
+                        else 
+                            false 
+                        end
+                    )
+                ) then
                     .strategy = $new_strategy 
                 else
                     . 
@@ -1148,7 +1184,20 @@ change_service_dns_strategy() {
                 echo -e "${GREEN}Successfully updated DNS strategy for '${service_display_name}' to '${selected_strategy}'.${NC}"
                 systemctl restart sing-box
                 echo -e "\n${YELLOW}Current DNS rule for '${service_display_name}':${NC}"
-                jq --arg rs "$rule_set_tag_for_jq_match" '.dns.rules[] | select(.rule_set != null and (.rule_set[0] == $rs or .rule_set == $rs))' /etc/sing-box/config.json
+                jq --arg rs "$rule_set_tag_for_jq_match" '
+                    .dns.rules[] | 
+                    select(
+                        .rule_set != null and (
+                            if (.rule_set | type) == "array" then 
+                                .rule_set[0] == $rs 
+                            elif (.rule_set | type) == "string" then 
+                                .rule_set == $rs 
+                            else 
+                                false 
+                            end
+                        )
+                    )
+                ' /etc/sing-box/config.json
                 rm /etc/sing-box/config.json.bak_dns_strat
             else
                 echo -e "${RED}Error: Strategy update failed due to configuration error. Restoring backup...${NC}"
