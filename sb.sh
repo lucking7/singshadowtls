@@ -572,11 +572,42 @@ INNER_EOF
             },
             {
                 "rule_set": ["geoip-cn", "geosite-cn"],
-                "server": "dns_cf"
+                "server": "dns_cf",
+                "strategy": "prefer_ipv4"
             },
             {
-                "outbound": "any",
-                "server": "dns_google"
+                "rule_set": ["geosite-ai-chat-!cn"],
+                "server": "dns_google",
+                "strategy": "ipv4_only"
+            },
+            {
+                "rule_set": ["geosite-google"],
+                "server": "dns_google",
+                "strategy": "ipv4_only"
+            },
+            {
+                "rule_set": ["geosite-netflix"],
+                "server": "dns_cf",
+                "strategy": "ipv6_only"
+            },
+            {
+                "rule_set": ["geosite-disney"],
+                "server": "dns_cf",
+                "strategy": "ipv6_only"
+            },
+            {
+                "rule_set": ["geosite-category-media"],
+                "server": "dns_cf",
+                "strategy": "ipv6_only"
+            },
+            {
+                "rule_set": ["geosite-spotify"],
+                "server": "dns_cf",
+                "strategy": "prefer_ipv4"
+            },
+            {
+                "server": "dns_google",
+                "strategy": "$default_strategy"
             }
         ]
     },
@@ -617,57 +648,27 @@ INNER_EOF
             },
             {
                 "rule_set": ["geosite-ai-chat-!cn"],
-                "action": "route",
-                "outbound": "direct",
-                "domain_resolver": {
-                    "server": "dns_resolver",
-                    "strategy": "ipv4_only"
-                }
+                "action": "direct"
             },
             {
                 "rule_set": ["geosite-google"],
-                "action": "route",
-                "outbound": "direct",
-                "domain_resolver": {
-                    "server": "dns_resolver",
-                    "strategy": "ipv4_only"
-                }
+                "action": "direct"
             },
             {
                 "rule_set": ["geosite-netflix"],
-                "action": "route",
-                "outbound": "direct",
-                "domain_resolver": {
-                    "server": "dns_resolver",
-                    "strategy": "ipv6_only"
-                }
+                "action": "direct"
             },
             {
                 "rule_set": ["geosite-disney"],
-                "action": "route",
-                "outbound": "direct",
-                "domain_resolver": {
-                    "server": "dns_resolver",
-                    "strategy": "ipv6_only"
-                }
+                "action": "direct"
             },
             {
                 "rule_set": ["geosite-category-media"],
-                "action": "route",
-                "outbound": "direct",
-                "domain_resolver": {
-                    "server": "dns_resolver",
-                    "strategy": "ipv6_only"
-                }
+                "action": "direct"
             },
             {
                 "rule_set": ["geosite-spotify"],
-                "action": "route",
-                "outbound": "direct",
-                "domain_resolver": {
-                    "server": "dns_resolver",
-                    "strategy": "prefer_ipv4" 
-                }
+                "action": "direct"
             },
             {
                 "rule_set": ["geoip-cn", "geosite-cn"],
@@ -1064,51 +1065,37 @@ change_ss_method() {
     fi
 }
 
-# Function to change routing preferences (DNS strategy for specific services)
-change_routing_preferences() {
-    echo -e "\n${BLUE}--- Change Service-Specific DNS Strategy ---${NC}"
+# Function to change service-specific DNS strategy in dns.rules
+change_service_dns_strategy() {
+    echo -e "\n${BLUE}--- Change Service-Specific DNS Strategy (in dns.rules) ---${NC}"
     if [ ! -f /etc/sing-box/config.json ]; then echo -e "${RED}Error: /etc/sing-box/config.json not found.${NC}"; return; fi
-    get_ip_info 
+    # get_ip_info # Not strictly needed here as we are not filtering options based on live IP state anymore
 
     local services_map=(
-        "AI Chat (!CN)|geosite-ai-chat-!cn"
-        "Google|geosite-google"
-        "Netflix|geosite-netflix"
-        "Disney|geosite-disney"
-        "Spotify|geosite-spotify"
-        "General Media (category)|geosite-category-media"
-        "All GeoSite Rules (Use with caution)|all_geosites" 
+        "AI Chat (!CN)|geosite-ai-chat-!cn|dns_google"
+        "Google|geosite-google|dns_google"
+        "Netflix|geosite-netflix|dns_cf"
+        "Disney|geosite-disney|dns_cf"
+        "Spotify|geosite-spotify|dns_cf"
+        "General Media (category)|geosite-category-media|dns_cf"
+        "China (geoip-cn, geosite-cn)|geoip-cn|dns_cf" # Simplified to just geoip-cn for jq matching ease, will apply to both if structure is consistent
+        # Note: The last field is the default *server* tag if we need to reconstruct a rule, or for reference.
     )
     
-    local available_strategies=()
-    if [[ $has_ipv4 -eq 1 && $has_ipv6 -eq 1 ]]; then
-        available_strategies=("prefer_ipv4" "prefer_ipv6" "ipv4_only" "ipv6_only")
-    elif [[ $has_ipv4 -eq 1 ]]; then
-        available_strategies=("ipv4_only" "prefer_ipv4")
-    elif [[ $has_ipv6 -eq 1 ]]; then
-        available_strategies=("ipv6_only" "prefer_ipv6")
-    else
-        echo -e "${YELLOW}Warning: IP v4/v6 availability unknown. Offering all network strategy options.${NC}"
-        available_strategies=("prefer_ipv4" "prefer_ipv6" "ipv4_only" "ipv6_only")
-    fi 
-
-    if [[ ${#available_strategies[@]} -eq 0 ]]; then
-        echo -e "${RED}Error: No network strategies available for configuration. Returning.${NC}"
-        return
-    fi
+    # These are the strategies the user can pick from.
+    local available_strategies=("prefer_ipv4" "prefer_ipv6" "ipv4_only" "ipv6_only")
 
     while true; do
-        echo -e "\n${YELLOW}Select a service category to modify its DNS strategy:${NC}"
+        echo -e "\n${YELLOW}Select a service category to modify its DNS resolution strategy:${NC}"
         for i in "${!services_map[@]}"; do
             local display_name=$(echo "${services_map[$i]}" | cut -d'|' -f1)
-            local current_strategy_display=""
             local rule_set_tag_jq=$(echo "${services_map[$i]}" | cut -d'|' -f2)
-
-            if [[ "$rule_set_tag_jq" != "all_geosites" ]]; then
-                 current_strategy=$(jq -r --arg rs "$rule_set_tag_jq" '.route.rules[] | select(.rule_set != null and .rule_set[0] == $rs) | .domain_resolver.strategy // "N/A"' /etc/sing-box/config.json)
-                 current_strategy_display=" (Current: ${CYAN}${current_strategy}${NC})"
-            fi
-            echo -e "  ${CYAN}$((i+1))) ${display_name}${current_strategy_display}${NC}"
+            # Try to find the rule by the first rule_set tag if multiple exist (e.g., geoip-cn, geosite-cn)
+            local first_rs_tag=$(echo "$rule_set_tag_jq" | cut -d',' -f1)
+            
+            local current_strategy=$(jq -r --arg rs "$first_rs_tag" '.dns.rules[] | select(.rule_set != null and (.rule_set[0] == $rs or .rule_set == $rs)) | .strategy // "not set"' /etc/sing-box/config.json)
+            local current_server=$(jq -r --arg rs "$first_rs_tag" '.dns.rules[] | select(.rule_set != null and (.rule_set[0] == $rs or .rule_set == $rs)) | .server // "not set"' /etc/sing-box/config.json)
+            echo -e "  ${CYAN}$((i+1))) ${display_name}${NC} (DNS Server: ${MAGENTA}${current_server}${NC}, Strategy: ${ORANGE}${current_strategy}${NC})"
         done
         echo -e "  ${CYAN}0) Return to Previous Menu${NC}"
         read -p "$(echo -e "${YELLOW}Enter your choice [0-${#services_map[@]}]: ${NC}")" service_choice
@@ -1119,9 +1106,9 @@ change_routing_preferences() {
         fi
         if [[ $service_choice -eq 0 ]]; then return; fi
 
-        local selected_service_entry=${services_map[$((service_choice-1))]}
+        local selected_service_entry=${services_map[$((service_choice-1))]} 
         local service_display_name=$(echo "$selected_service_entry" | cut -d'|' -f1)
-        local rule_set_tag=$(echo "$selected_service_entry" | cut -d'|' -f2)
+        local rule_set_tag_for_jq_match=$(echo "$selected_service_entry" | cut -d'|' -f2 | cut -d',' -f1) # Use first tag for matching rule
             
         echo -e "\n${YELLOW}Select DNS strategy for '${service_display_name}':${NC}"
         for i in "${!available_strategies[@]}"; do
@@ -1136,29 +1123,23 @@ change_routing_preferences() {
         fi
         if [[ $strategy_choice_idx -eq 0 ]]; then echo -e "${BLUE}Cancelled change for ${service_display_name}.${NC}"; continue; fi
 
-        local selected_strategy=${available_strategies[$((strategy_choice_idx-1))]}
+        local selected_strategy=${available_strategies[$((strategy_choice_idx-1))]} 
         
-        cp /etc/sing-box/config.json /etc/sing-box/config.json.bak_routing
-        local jq_query
-        if [[ "$rule_set_tag" == "all_geosites" ]]; then
-            echo -e "${YELLOW}Applying strategy '${selected_strategy}' to ALL rules containing 'rule_set' field...${NC}"
-            jq_query='
-                .route.rules |= map(
-                    if (.rule_set != null) then
-                        .domain_resolver = {"server": "dns_resolver", "strategy": $new_strategy}
-                    else . end
-                )'
-        else
-            jq_query='
-                .route.rules |= map(
-                    if (.rule_set != null and .rule_set[0] == $rs_tag) then
-                         .domain_resolver = {"server": "dns_resolver", "strategy": $new_strategy}
-                    else . end
-                )'
-        fi
-
-        jq --arg rs_tag "$rule_set_tag" --arg new_strategy "$selected_strategy" "$jq_query" \
-            /etc/sing-box/config.json.bak_routing > /tmp/config.json.tmp
+        cp /etc/sing-box/config.json /etc/sing-box/config.json.bak_dns_strat
+        
+        # jq query to update the strategy for the rule matching the first rule_set tag
+        # This assumes rule_set is an array or a single string.
+        local jq_query='
+            .dns.rules |= map(
+                if (.rule_set != null and (.rule_set[0] == $rs_tag or .rule_set == $rs_tag)) then
+                    .strategy = $new_strategy 
+                else
+                    . 
+                end
+            )'
+        
+        jq --arg rs_tag "$rule_set_tag_for_jq_match" --arg new_strategy "$selected_strategy" "$jq_query" \
+            /etc/sing-box/config.json.bak_dns_strat > /tmp/config.json.tmp
 
         if [[ $? -eq 0 ]]; then
             mv /tmp/config.json.tmp /etc/sing-box/config.json
@@ -1166,20 +1147,17 @@ change_routing_preferences() {
             if format_config; then
                 echo -e "${GREEN}Successfully updated DNS strategy for '${service_display_name}' to '${selected_strategy}'.${NC}"
                 systemctl restart sing-box
-                echo -e "\n${YELLOW}Current configuration snippet for '${service_display_name}':${NC}"
-                if [[ "$rule_set_tag" == "all_geosites" ]]; then
-                    jq '.route.rules[] | select(.rule_set != null and .domain_resolver.strategy == $strat)' --arg strat "$selected_strategy" /etc/sing-box/config.json
-                else
-                    jq '.route.rules[] | select(.rule_set != null and .rule_set[0] == $rs)' --arg rs "$rule_set_tag" /etc/sing-box/config.json
-                fi
-                rm /etc/sing-box/config.json.bak_routing
+                echo -e "\n${YELLOW}Current DNS rule for '${service_display_name}':${NC}"
+                jq --arg rs "$rule_set_tag_for_jq_match" '.dns.rules[] | select(.rule_set != null and (.rule_set[0] == $rs or .rule_set == $rs))' /etc/sing-box/config.json
+                rm /etc/sing-box/config.json.bak_dns_strat
             else
                 echo -e "${RED}Error: Strategy update failed due to configuration error. Restoring backup...${NC}"
-                mv /etc/sing-box/config.json.bak_routing /etc/sing-box/config.json
+                mv /etc/sing-box/config.json.bak_dns_strat /etc/sing-box/config.json
                 restart_sing_box
             fi
         else
-            echo -e "${RED}Error: Failed to update routing strategy using jq.${NC}"
+            echo -e "${RED}Error: Failed to update DNS strategy using jq. Exit status: $?${NC}"
+            cat /tmp/config.json.tmp # Show what jq produced if it failed but still wrote to tmp
             rm -f /tmp/config.json.tmp
         fi
         read -p "$(echo -e "\n${BLUE}Press Enter to continue...${NC}")"
@@ -1270,6 +1248,7 @@ modify_configuration() {
             echo -e "  ${CYAN}2) Reset Shadowsocks Password${NC}"
             echo -e "  ${CYAN}3) Change Shadowsocks Encryption Method${NC}"
             echo -e "  ${CYAN}4) Change Service-Specific DNS Strategy${NC}"
+            # Option 5 (Wildcard SNI) is omitted if ShadowTLS is not installed
             echo -e "  ${CYAN}0) Return to Main Menu${NC}"
             read -p "$(echo -e "${YELLOW}Enter your choice [0-4]: ${NC}")" confAnswer
         fi
@@ -1278,7 +1257,7 @@ modify_configuration() {
             1 ) change_port ;;
             2 ) change_passwords ;;
             3 ) change_ss_method ;;
-            4 ) change_routing_preferences ;;
+            4 ) change_service_dns_strategy ;;
             5 ) if [[ $shadowtls_installed -eq 1 ]]; then change_wildcard_sni; else echo -e "${RED}Invalid option. ShadowTLS not installed.${NC}"; fi ;;
             0 ) return ;;
             * ) echo -e "${RED}Invalid choice. Please try again.${NC}" ;;
