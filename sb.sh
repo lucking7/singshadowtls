@@ -348,23 +348,42 @@ install_sing_box() {
     esac
     echo -e "${GREEN}Using Shadowsocks method: $ss_method${NC}"
 
-    case "$ss_method" in
-        "2022-blake3-aes-128-gcm")
-            ss_pwd=$(openssl rand -base64 16)
-            ;;
-        "2022-blake3-aes-256-gcm"|"2022-blake3-chacha20-poly1305")
-            ss_pwd=$(openssl rand -base64 32)
-            ;;
-        *) 
-            ss_pwd=$(openssl rand -base64 32) 
-            ;;
-    esac
-    echo -e "${GREEN}Generated Shadowsocks password.${NC}"
+    # Shadowsocks密码设置
+    echo -e "\n${YELLOW}Shadowsocks 密码设置：${NC}"
+    echo -e "  - 输入自定义密码"
+    echo -e "  - 按回车键随机生成密码"
+    read -p "$(echo -e "${YELLOW}输入 Shadowsocks 密码 (回车随机生成): ${NC}")" ss_pwd
+    
+    if [[ -z "$ss_pwd" ]]; then
+        case "$ss_method" in
+            "2022-blake3-aes-128-gcm")
+                ss_pwd=$(openssl rand -base64 16)
+                ;;
+            "2022-blake3-aes-256-gcm"|"2022-blake3-chacha20-poly1305")
+                ss_pwd=$(openssl rand -base64 32)
+                ;;
+            *) 
+                ss_pwd=$(openssl rand -base64 32) 
+                ;;
+        esac
+        echo -e "${GREEN}已生成 Shadowsocks 密码。${NC}"
+    else
+        echo -e "${GREEN}使用自定义 Shadowsocks 密码。${NC}"
+    fi
 
     local shadowtls_pwd=""
     if [[ $use_shadowtls -eq 1 ]]; then
-        shadowtls_pwd=$(openssl rand -base64 32)
-        echo -e "${GREEN}Generated ShadowTLS password.${NC}"
+        echo -e "\n${YELLOW}ShadowTLS 密码设置：${NC}"
+        echo -e "  - 输入自定义密码"
+        echo -e "  - 按回车键随机生成密码"
+        read -p "$(echo -e "${YELLOW}输入 ShadowTLS 密码 (回车随机生成): ${NC}")" shadowtls_pwd
+        
+        if [[ -z "$shadowtls_pwd" ]]; then
+            shadowtls_pwd=$(openssl rand -base64 32)
+            echo -e "${GREEN}已生成 ShadowTLS 密码。${NC}"
+        else
+            echo -e "${GREEN}使用自定义 ShadowTLS 密码。${NC}"
+        fi
     fi
 
     echo -e "\n${BLUE}--- Port Configuration ---${NC}"
@@ -372,22 +391,43 @@ install_sing_box() {
     local port_prompt_text=""
 
     if [[ $use_shadowtls -eq 1 ]]; then
-        port_prompt_text="Set ShadowTLS listening port"
+        port_prompt_text="ShadowTLS 监听端口"
     else
-        port_prompt_text="Set Shadowsocks (public) listening port"
+        port_prompt_text="Shadowsocks (公网) 监听端口"
     fi
 
-    read -p "$(echo -e "${YELLOW}${port_prompt_text} [10000-65535] (Enter for random): ${NC}")" port
-    [[ -z $port ]] && port=$(shuf -i 10000-65535 -n 1)
-    until [[ "$port" =~ ^[0-9]+$ && "$port" -ge 10000 && "$port" -le 65535 && -z $(ss -ntlp | awk '{print $4}' | sed 's/.*://g' | grep -w "$port") ]]; do
-        echo -e "${RED}Port $port is invalid, out of range [10000-65535], or already in use.${NC}"
-        read -p "$(echo -e "${YELLOW}${port_prompt_text} [10000-65535] (Enter for random): ${NC}")" port
-        [[ -z $port ]] && port=$(shuf -i 10000-65535 -n 1) && echo -e "${BLUE}Random port selected: $port${NC}"
+    echo -e "${YELLOW}端口设置提示：${NC}"
+    echo -e "  - 输入指定端口号 (10000-65535)"
+    echo -e "  - 按回车键随机生成端口"
+    read -p "$(echo -e "${YELLOW}设置 ${port_prompt_text} (回车随机生成): ${NC}")" port
+    
+    if [[ -z "$port" ]]; then
+        port=$(shuf -i 10000-65535 -n 1)
+        echo -e "${BLUE}已随机生成端口: $port${NC}"
+    fi
+    
+    # 验证端口
+    while true; do
+        if [[ ! "$port" =~ ^[0-9]+$ ]]; then
+            echo -e "${RED}错误：端口必须是数字。${NC}"
+        elif [[ "$port" -lt 10000 || "$port" -gt 65535 ]]; then
+            echo -e "${RED}错误：端口必须在 10000-65535 范围内。${NC}"
+        elif [[ -n $(ss -ntlp | awk '{print $4}' | sed 's/.*://g' | grep -w "$port") ]]; then
+            echo -e "${RED}错误：端口 $port 已被占用。${NC}"
+        else
+            break
+        fi
+        read -p "$(echo -e "${YELLOW}请重新输入端口 (回车随机生成): ${NC}")" port
+        if [[ -z "$port" ]]; then
+            port=$(shuf -i 10000-65535 -n 1)
+            echo -e "${BLUE}已随机生成端口: $port${NC}"
+        fi
     done
+    
     if [[ $use_shadowtls -eq 1 ]]; then
-        echo -e "${GREEN}Using new port $port for ShadowTLS.${NC}"
+        echo -e "${GREEN}将使用端口 $port 作为 ShadowTLS。${NC}"
     else
-        echo -e "${GREEN}Using new public port $port for Shadowsocks.${NC}"
+        echo -e "${GREEN}将使用端口 $port 作为 Shadowsocks 公网端口。${NC}"
     fi
     
     local ss_port_internal="" # Internal SS port, only used if ShadowTLS is active
@@ -396,16 +436,21 @@ install_sing_box() {
         until [[ $ss_port_internal != $port && -z $(ss -ntlp | awk '{print $4}' | sed 's/.*://g' | grep -w "$ss_port_internal") ]]; do
             ss_port_internal=$(shuf -i 10000-65535 -n 1)
         done
-        echo -e "${GREEN}Using port $ss_port_internal for Shadowsocks (internal).${NC}"
+        echo -e "${GREEN}将使用端口 $ss_port_internal 作为 Shadowsocks (内部)。${NC}"
     fi
 
     echo -e "\n${BLUE}--- ShadowTLS Handshake Settings ---${NC}"
     local proxysite=""
     local wildcard_sni=""
     if [[ $use_shadowtls -eq 1 ]]; then
-        read -p "$(echo -e "${YELLOW}Set SNI (fake website domain) for ShadowTLS (e.g., weather-data.apple.com) (Enter for default: weather-data.apple.com): ${NC}")" proxysite
-        [[ -z $proxysite ]] && proxysite="weather-data.apple.com"
-        echo -e "${GREEN}Using SNI: $proxysite${NC}"
+        echo -e "${YELLOW}SNI 设置提示：${NC}"
+        echo -e "  - 输入自定义域名 (例如: weather-data.apple.com)"
+        echo -e "  - 按回车键使用默认值: weather-data.apple.com"
+        read -p "$(echo -e "${YELLOW}设置 ShadowTLS 的 SNI (伪装网站域名) (回车使用默认): ${NC}")" proxysite
+        if [[ -z $proxysite ]]; then
+            proxysite="weather-data.apple.com"
+        fi
+        echo -e "${GREEN}使用 SNI: $proxysite${NC}"
 
         echo -e "\n${YELLOW}Select ShadowTLS wildcard SNI mode:${NC}"
         echo -e "  ${CYAN}1) off: Disable wildcard SNI (strict SNI match)${NC}"
@@ -788,582 +833,901 @@ EOF
 
 # Function to uninstall Sing-Box
 uninstall_sing_box() {
-    echo -e "\n${RED}--- Uninstalling Sing-Box ---${NC}"
-    read -p "$(echo -e "${YELLOW}Are you sure you want to uninstall Sing-Box and remove all its configurations? (yes/no): ${NC}")" confirmation
-    if [[ "$confirmation" != "yes" ]]; then
-        echo -e "${BLUE}Uninstallation cancelled.${NC}"
-        return
-    fi
-
-    echo -e "${BLUE}Stopping Sing-Box service...${NC}"
-    systemctl stop sing-box
-    echo -e "${BLUE}Disabling Sing-Box service...${NC}"
-    systemctl disable sing-box
-    echo -e "${BLUE}Removing Sing-Box package (apt autoremove sing-box)...${NC}"
-    apt autoremove --purge sing-box -y 
-    echo -e "${BLUE}Removing residual directories (/etc/sing-box, /var/lib/sing-box)...${NC}"
-    rm -rf /etc/sing-box /var/lib/sing-box 
-    echo -e "${GREEN}Sing-Box has been uninstalled.${NC}"
-}
-
-# Function to start Sing-Box service
-start_sing_box() {
-    echo -e "${BLUE}Starting Sing-Box service...${NC}"
-    systemctl start sing-box
-    systemctl enable sing-box >/dev/null 2>&1 
+    echo -e "${BLUE}--- Uninstalling Sing-Box ---${NC}"
+    
     if systemctl is-active --quiet sing-box; then
-        echo -e "${GREEN}Sing-Box service started successfully.${NC}"
-    else
-        echo -e "${RED}Error: Failed to start Sing-Box service.${NC}"
-        echo -e "${YELLOW}Check status: systemctl status sing-box${NC}"
+        echo -e "${BLUE}Stopping Sing-Box service...${NC}"
+        systemctl stop sing-box
     fi
+    
+    if systemctl is-enabled --quiet sing-box; then
+        echo -e "${BLUE}Disabling Sing-Box service...${NC}"
+        systemctl disable sing-box
+    fi
+    
+    if [[ -f /etc/systemd/system/sing-box.service ]]; then
+        echo -e "${BLUE}Removing Sing-Box service file...${NC}"
+        rm -f /etc/systemd/system/sing-box.service
+        systemctl daemon-reload
+    fi
+    
+    if [[ -d /etc/sing-box ]]; then
+        echo -e "${BLUE}Removing configuration directory...${NC}"
+        rm -rf /etc/sing-box
+    fi
+    
+    if [[ -f /usr/local/bin/sing-box ]]; then
+        echo -e "${BLUE}Removing Sing-Box binary...${NC}"
+        rm -f /usr/local/bin/sing-box
+    fi
+    
+    if id "sing-box" &>/dev/null; then
+        echo -e "${BLUE}Removing sing-box user...${NC}"
+        userdel -r sing-box 2>/dev/null
+    fi
+    
+    echo -e "${GREEN}Sing-Box has been successfully uninstalled.${NC}"
 }
 
-# Function to stop Sing-Box service
-stop_sing_box() {
-    echo -e "${BLUE}Stopping Sing-Box service...${NC}"
-    systemctl stop sing-box
-    if ! systemctl is-active --quiet sing-box; then
-        echo -e "${YELLOW}Sing-Box service stopped.${NC}"
-    else
-        echo -e "${RED}Error: Failed to stop Sing-Box service.${NC}"
+# Function to change port
+change_port() {
+    if [[ ! -f /etc/sing-box/config.json ]]; then
+        echo -e "${RED}Error: Configuration file not found.${NC}"
+        return 1
     fi
-}
-
-# Function to restart Sing-Box service
-restart_sing_box() {
+    
+    echo -e "\n${BLUE}--- Change Port Configuration ---${NC}"
+    echo -e "${CYAN}Which port would you like to change?${NC}"
+    echo -e "1) ShadowTLS Port"
+    echo -e "2) Shadowsocks Port"
+    read -p "Enter your choice (1-2): " port_choice
+    
+    case $port_choice in
+        1)
+            local tag="shadowtls"
+            local service_name="ShadowTLS"
+            ;;
+        2)
+            local tag="shadowsocks"
+            local service_name="Shadowsocks"
+            ;;
+        *)
+            echo -e "${RED}Invalid choice.${NC}"
+            return 1
+            ;;
+    esac
+    
+    local current_port=$(jq -r ".inbounds[] | select(.tag == \"$tag\") | .listen_port" /etc/sing-box/config.json)
+    echo -e "${CYAN}Current $service_name port: $current_port${NC}"
+    
+    echo -e "${YELLOW}自定义端口输入提示：${NC}"
+    echo -e "  - 输入指定端口号 (10000-65535)"
+    echo -e "  - 按回车键随机生成端口"
+    
+    read -p "请输入新端口号或按回车: " new_port
+    
+    if [[ -z "$new_port" ]]; then
+        # Generate random port
+        while true; do
+            new_port=$((RANDOM % 55536 + 10000))
+            if ! ss -tuln | grep -q ":$new_port "; then
+                echo -e "${GREEN}随机生成端口: $new_port${NC}"
+                break
+            fi
+        done
+    else
+        # Validate user input
+        if ! [[ "$new_port" =~ ^[0-9]+$ ]] || [ "$new_port" -lt 10000 ] || [ "$new_port" -gt 65535 ]; then
+            echo -e "${RED}错误: 端口必须是 10000-65535 之间的数字。${NC}"
+            return 1
+        fi
+        
+        # Check if port is in use
+        if ss -tuln | grep -q ":$new_port "; then
+            echo -e "${RED}错误: 端口 $new_port 已被占用。${NC}"
+            return 1
+        fi
+    fi
+    
+    # Update configuration
+    jq ".inbounds = [.inbounds[] | if .tag == \"$tag\" then .listen_port = $new_port else . end]" /etc/sing-box/config.json > /tmp/sing-box-temp.json
+    mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+    
+    # Set permissions
+    chown sing-box:sing-box /etc/sing-box/config.json
+    chmod 640 /etc/sing-box/config.json
+    
+    # Format and validate configuration
+    if ! format_config; then
+        echo -e "${RED}Error: Configuration validation failed.${NC}"
+        return 1
+    fi
+    
+    # Restart service
     echo -e "${BLUE}Restarting Sing-Box service...${NC}"
     systemctl restart sing-box
+    
     if systemctl is-active --quiet sing-box; then
-        echo -e "${GREEN}Sing-Box service restarted successfully.${NC}"
+        echo -e "${GREEN}Port changed successfully! New $service_name port: $new_port${NC}"
     else
-        echo -e "${RED}Error: Failed to restart Sing-Box service.${NC}"
-        echo -e "${YELLOW}Check status: systemctl status sing-box${NC}"
+        echo -e "${RED}Error: Service failed to restart.${NC}"
+        return 1
     fi
 }
 
-# Function to manage Sing-Box service
-manage_sing_box() {
-    if ! command -v sing-box >/dev/null 2>&1; then
-        echo -e "${RED}Sing-Box is not installed. Please install it first.${NC}"
-        return
-    fi
-    while true; do
-        echo -e "\n${YELLOW}--- Manage Sing-Box Service ---${NC}"
-        echo -e "Service status: $(systemctl is-active sing-box && echo -e "${GREEN}Active${NC}" || echo -e "${RED}Inactive${NC}")"
-        echo -e "Enabled on boot: $(systemctl is-enabled sing-box && echo -e "${GREEN}Yes${NC}" || echo -e "${RED}No${NC}")"
-        echo -e "\n${YELLOW}Select an operation:${NC}"
-        echo -e "  ${CYAN}1) Start Service${NC}"
-        echo -e "  ${CYAN}2) Stop Service${NC}"
-        echo -e "  ${CYAN}3) Restart Service${NC}"
-        echo -e "  ${CYAN}4) Enable Service on Boot${NC}"
-        echo -e "  ${CYAN}5) Disable Service on Boot${NC}"
-        echo -e "  ${CYAN}6) View Service Status (systemctl status)${NC}"
-        echo -e "  ${CYAN}7) View Service Logs (journalctl)${NC}"
-        echo -e "  ${CYAN}0) Return to Main Menu${NC}"
-        read -p "$(echo -e "${YELLOW}Enter your choice [0-7]: ${NC}")" switchInput
-        case $switchInput in
-            1 ) start_sing_box ;;
-            2 ) stop_sing_box ;;
-            3 ) restart_sing_box ;;
-            4 ) systemctl enable sing-box && echo -e "${GREEN}Sing-Box enabled on boot.${NC}" || echo -e "${RED}Failed to enable Sing-Box.${NC}" ;;
-            5 ) systemctl disable sing-box && echo -e "${YELLOW}Sing-Box disabled on boot.${NC}" || echo -e "${RED}Failed to disable Sing-Box.${NC}" ;;
-            6 ) systemctl status sing-box ;;
-            7 ) journalctl -u sing-box -e --no-pager ;; 
-            0 ) return ;;
-            * ) echo -e "${RED}Invalid choice. Please try again.${NC}" ;;
-        esac
-        [[ "$switchInput" != "0" ]] && read -p "$(echo -e "\n${BLUE}Press Enter to continue...${NC}")"
-    done
-}
-
-# Function to change ShadowTLS port
-change_port() {
-    echo -e "\n${BLUE}--- Change ShadowTLS Port ---${NC}"
-    if [ ! -f /etc/sing-box/config.json ]; then echo -e "${RED}Error: /etc/sing-box/config.json not found.${NC}"; return; fi
-    
-    local oldport
-    local shadowtls_inbound_exists
-    shadowtls_inbound_exists=$(jq -e '.inbounds[] | select(.type == "shadowtls")' /etc/sing-box/config.json >/dev/null 2>&1; echo $?)
-
-    local port_type_string="ShadowTLS"
-    if [[ $shadowtls_inbound_exists -ne 0 ]]; then # ShadowTLS not found, so we are changing SS public port
-        port_type_string="Shadowsocks (public)"
-        oldport=$(jq -r '.inbounds[] | select(.type == "shadowsocks") | .listen_port' /etc/sing-box/config.json)
-    else
-        oldport=$(jq -r '.inbounds[] | select(.type == "shadowtls") | .listen_port' /etc/sing-box/config.json)
-    fi
-    
-    echo -e "${BLUE}Current ${port_type_string} port: ${CYAN}$oldport${NC}"
-    
-    read -p "$(echo -e "${YELLOW}Set new ${port_type_string} port [10000-65535] (Enter for random, current: $oldport): ${NC}")" port
-    if [[ -z "$port" ]]; then
-        port=$(shuf -i 10000-65535 -n 1)
-        echo -e "${BLUE}Random port selected: $port${NC}"
-    fi
-
-    until [[ "$port" =~ ^[0-9]+$ && "$port" -ge 10000 && "$port" -le 65535 && -z $(ss -ntlp | awk '{print $4}' | sed 's/.*://g' | grep -w "$port") ]]; do
-        echo -e "${RED}Port $port is invalid, out of range [10000-65535], or already in use.${NC}"
-        read -p "$(echo -e "${YELLOW}Set new ${port_type_string} port [10000-65535] (Enter for random): ${NC}")" port
-        [[ -z $port ]] && port=$(shuf -i 10000-65535 -n 1) && echo -e "${BLUE}Random port selected: $port${NC}"
-    done
-    echo -e "${GREEN}Using new port $port for ${port_type_string}.${NC}"
-
-    cp /etc/sing-box/config.json /etc/sing-box/config.json.bak_port
-    
-    local jq_filter
-    if [[ $shadowtls_inbound_exists -ne 0 ]]; then # ShadowTLS not found, update SS port
-        jq_filter='(.inbounds[] | select(.type == "shadowsocks") | .listen_port) = $newport'
-    else # ShadowTLS found, update STLS port
-        jq_filter='(.inbounds[] | select(.type == "shadowtls") | .listen_port) = $newport'
-    fi
-
-    jq --argjson newport "$port" "$jq_filter" /etc/sing-box/config.json.bak_port > /tmp/config.json.tmp
-    
-    if [[ $? -eq 0 ]]; then
-        mv /tmp/config.json.tmp /etc/sing-box/config.json
-        echo -e "${BLUE}Formatting and validating updated configuration...${NC}"
-        if format_config; then
-            restart_sing_box
-            echo -e "${GREEN}Sing-Box ${port_type_string} port has been changed to: $port${NC}"
-            echo -e "${YELLOW}Please update your client configuration file.${NC}"
-            output_node_info
-            rm /etc/sing-box/config.json.bak_port 
-        else
-            echo -e "${RED}Error: Port update failed due to configuration error after change. Restoring backup...${NC}"
-            mv /etc/sing-box/config.json.bak_port /etc/sing-box/config.json
-            restart_sing_box 
-        fi
-    else
-        echo -e "${RED}Error: Failed to update port in JSON structure using jq.${NC}"
-        rm -f /tmp/config.json.tmp
-    fi
-}
-
-# Function to change passwords (ShadowTLS & Shadowsocks)
+# Function to change passwords
 change_passwords() {
-    echo -e "\n${BLUE}--- Reset Passwords ---${NC}"
-    if [ ! -f /etc/sing-box/config.json ]; then echo -e "${RED}Error: /etc/sing-box/config.json not found.${NC}"; return; fi
-
-    local shadowtls_inbound_exists
-    shadowtls_inbound_exists=$(jq -e '.inbounds[] | select(.type == "shadowtls")' /etc/sing-box/config.json >/dev/null 2>&1; echo $?)
-    local config_backup_file="/etc/sing-box/config.json.bak_passwd"
-    cp /etc/sing-box/config.json "$config_backup_file"
-
-    local new_ss_pwd
-    local current_ss_method=$(jq -r '.inbounds[] | select(.type == "shadowsocks") | .method' "$config_backup_file")
-    case "$current_ss_method" in
-        "2022-blake3-aes-128-gcm") new_ss_pwd=$(openssl rand -base64 16) ;;
-        *) new_ss_pwd=$(openssl rand -base64 32) ;;
-    esac
-    echo -e "${GREEN}Generated new Shadowsocks password.${NC}"
-
-    local jq_filter_ss='((.inbounds[] | select(.type == "shadowsocks")).password) = $new_ss_pwd'
-    local final_jq_filter=$jq_filter_ss
-
-    if [[ $shadowtls_inbound_exists -eq 0 ]]; then # ShadowTLS is configured
-        local new_shadowtls_pwd=$(openssl rand -base64 32)
-        echo -e "${GREEN}Generated new ShadowTLS password.${NC}"
-        local jq_filter_stls='((.inbounds[] | select(.type == "shadowtls") | .users[0]).password) = $new_stls_pwd'
-        jq --arg new_stls_pwd "$new_shadowtls_pwd" --arg new_ss_pwd "$new_ss_pwd" "$jq_filter_stls | $jq_filter_ss" "$config_backup_file" > /tmp/config.json.tmp
-    else # Only Shadowsocks
-        echo -e "${YELLOW}ShadowTLS not installed, only resetting Shadowsocks password.${NC}"
-        jq --arg new_ss_pwd "$new_ss_pwd" "$jq_filter_ss" "$config_backup_file" > /tmp/config.json.tmp
+    if [[ ! -f /etc/sing-box/config.json ]]; then
+        echo -e "${RED}Error: Configuration file not found.${NC}"
+        return 1
     fi
-
-    if [[ $? -eq 0 ]]; then
-        mv /tmp/config.json.tmp /etc/sing-box/config.json
-        echo -e "${BLUE}Formatting and validating updated configuration...${NC}"
-        if format_config; then
-            restart_sing_box
-            if [[ $shadowtls_inbound_exists -eq 0 ]]; then
-                 echo -e "${GREEN}Sing-Box ShadowTLS and Shadowsocks passwords have been reset.${NC}"
-            else
-                 echo -e "${GREEN}Sing-Box Shadowsocks password has been reset.${NC}"
-            fi
-            echo -e "${YELLOW}Please update your client configuration file.${NC}"
-            output_node_info
-            rm "$config_backup_file"
+    
+    echo -e "\n${BLUE}--- Change Passwords ---${NC}"
+    
+    # Get current encryption method
+    local current_method=$(jq -r '.inbounds[] | select(.tag == "shadowsocks") | .method' /etc/sing-box/config.json)
+    
+    # Change ShadowTLS password
+    echo -e "\n${CYAN}ShadowTLS 密码设置：${NC}"
+    echo -e "${YELLOW}自定义密码输入提示：${NC}"
+    echo -e "  - 输入自定义密码"
+    echo -e "  - 按回车键随机生成密码"
+    
+    read -p "请输入新的 ShadowTLS 密码或按回车: " shadowtls_password
+    
+    if [[ -z "$shadowtls_password" ]]; then
+        shadowtls_password=$(openssl rand -base64 16)
+        echo -e "${GREEN}随机生成密码: $shadowtls_password${NC}"
+    fi
+    
+    # Change Shadowsocks password
+    echo -e "\n${CYAN}Shadowsocks 密码设置：${NC}"
+    echo -e "${YELLOW}自定义密码输入提示：${NC}"
+    echo -e "  - 输入自定义密码"
+    echo -e "  - 按回车键随机生成密码"
+    
+    read -p "请输入新的 Shadowsocks 密码或按回车: " shadowsocks_password
+    
+    if [[ -z "$shadowsocks_password" ]]; then
+        if [[ "$current_method" =~ ^2022 ]]; then
+            shadowsocks_password=$(openssl rand -base64 32)
         else
-            echo -e "${RED}Error: Password update failed due to configuration error. Restoring backup...${NC}"
-            mv "$config_backup_file" /etc/sing-box/config.json
-            restart_sing_box 
+            shadowsocks_password=$(openssl rand -base64 16)
         fi
+        echo -e "${GREEN}随机生成密码: $shadowsocks_password${NC}"
+    fi
+    
+    # Update configuration
+    jq ".inbounds = [.inbounds[] | if .tag == \"shadowtls\" then .handshake.server.password = \"$shadowtls_password\" else . end]" /etc/sing-box/config.json > /tmp/sing-box-temp.json
+    mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+    
+    jq ".inbounds = [.inbounds[] | if .tag == \"shadowsocks\" then .password = \"$shadowsocks_password\" else . end]" /etc/sing-box/config.json > /tmp/sing-box-temp.json
+    mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+    
+    # Set permissions
+    chown sing-box:sing-box /etc/sing-box/config.json
+    chmod 640 /etc/sing-box/config.json
+    
+    # Format and validate configuration
+    if ! format_config; then
+        echo -e "${RED}Error: Configuration validation failed.${NC}"
+        return 1
+    fi
+    
+    # Restart service
+    echo -e "${BLUE}Restarting Sing-Box service...${NC}"
+    systemctl restart sing-box
+    
+    if systemctl is-active --quiet sing-box; then
+        echo -e "${GREEN}Passwords changed successfully!${NC}"
+        output_node_info
     else
-        echo -e "${RED}Error: Failed to update passwords in JSON structure using jq.${NC}"
-        rm -f /tmp/config.json.tmp
-        # Restore backup if jq failed before mv
-        if [ -f "$config_backup_file" ]; then mv "$config_backup_file" /etc/sing-box/config.json; fi
+        echo -e "${RED}Error: Service failed to restart.${NC}"
+        return 1
     fi
 }
 
-# Function to change Shadowsocks encryption method
-change_ss_method() {
-    echo -e "\n${BLUE}--- Change Shadowsocks Encryption Method ---${NC}"
-    if [ ! -f /etc/sing-box/config.json ]; then echo -e "${RED}Error: /etc/sing-box/config.json not found.${NC}"; return; fi
-
-    local old_method=$(jq -r '.inbounds[] | select(.type == "shadowsocks") | .method' /etc/sing-box/config.json)
-    echo -e "${BLUE}Current Shadowsocks encryption method: ${CYAN}$old_method${NC}"
+# Function to change ShadowTLS password only
+change_shadowtls_password() {
+    if [[ ! -f /etc/sing-box/config.json ]]; then
+        echo -e "${RED}Error: Configuration file not found.${NC}"
+        return 1
+    fi
     
-    echo -e "\n${YELLOW}Select new Shadowsocks encryption method:${NC}"
-    echo -e "  ${CYAN}1) 2022-blake3-aes-128-gcm${NC}"
-    echo -e "  ${CYAN}2) 2022-blake3-aes-256-gcm${NC}"
-    echo -e "  ${CYAN}3) 2022-blake3-chacha20-poly1305${NC}"
-    echo -e "  ${CYAN}4) aes-128-gcm${NC}"
-    echo -e "  ${CYAN}5) aes-256-gcm${NC}"
-    echo -e "  ${CYAN}6) chacha20-ietf-poly1305${NC}"
-    echo -e "  ${CYAN}0) Cancel${NC}"
-    read -p "$(echo -e "${YELLOW}Enter your choice [0-6]: ${NC}")" ss_method_choice
-    local new_method=""
-    case "$ss_method_choice" in
+    echo -e "\n${BLUE}--- Change ShadowTLS Password ---${NC}"
+    
+    echo -e "${YELLOW}自定义密码输入提示：${NC}"
+    echo -e "  - 输入自定义密码"
+    echo -e "  - 按回车键随机生成密码"
+    
+    read -p "请输入新的 ShadowTLS 密码或按回车: " new_password
+    
+    if [[ -z "$new_password" ]]; then
+        new_password=$(openssl rand -base64 16)
+        echo -e "${GREEN}随机生成密码: $new_password${NC}"
+    fi
+    
+    # Update configuration
+    jq ".inbounds = [.inbounds[] | if .tag == \"shadowtls\" then .handshake.server.password = \"$new_password\" else . end]" /etc/sing-box/config.json > /tmp/sing-box-temp.json
+    mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+    
+    # Set permissions
+    chown sing-box:sing-box /etc/sing-box/config.json
+    chmod 640 /etc/sing-box/config.json
+    
+    # Format and validate configuration
+    if ! format_config; then
+        echo -e "${RED}Error: Configuration validation failed.${NC}"
+        return 1
+    fi
+    
+    # Restart service
+    echo -e "${BLUE}Restarting Sing-Box service...${NC}"
+    systemctl restart sing-box
+    
+    if systemctl is-active --quiet sing-box; then
+        echo -e "${GREEN}ShadowTLS password changed successfully!${NC}"
+        output_node_info
+    else
+        echo -e "${RED}Error: Service failed to restart.${NC}"
+        return 1
+    fi
+}
+
+# Function to change ShadowTLS SNI
+change_shadowtls_sni() {
+    if [[ ! -f /etc/sing-box/config.json ]]; then
+        echo -e "${RED}Error: Configuration file not found.${NC}"
+        return 1
+    fi
+    
+    echo -e "\n${BLUE}--- Change ShadowTLS SNI ---${NC}"
+    
+    local current_sni=$(jq -r '.inbounds[] | select(.tag == "shadowtls") | .handshake.server.server_name' /etc/sing-box/config.json)
+    echo -e "${CYAN}Current SNI: $current_sni${NC}"
+    
+    echo -e "\n${CYAN}Select new SNI:${NC}"
+    echo -e "1) www.tesla.com (Recommended)"
+    echo -e "2) www.bing.com"
+    echo -e "3) www.microsoft.com"
+    echo -e "4) www.apple.com"
+    echo -e "5) www.amazon.com"
+    echo -e "6) www.cloudflare.com"
+    echo -e "7) gateway.icloud.com"
+    echo -e "8) itunes.apple.com"
+    echo -e "9) download.microsoft.com"
+    echo -e "10) www.paypal.com"
+    echo -e "11) Custom domain"
+    
+    read -p "Enter your choice (1-11): " sni_choice
+    
+    case $sni_choice in
+        1) new_sni="www.tesla.com" ;;
+        2) new_sni="www.bing.com" ;;
+        3) new_sni="www.microsoft.com" ;;
+        4) new_sni="www.apple.com" ;;
+        5) new_sni="www.amazon.com" ;;
+        6) new_sni="www.cloudflare.com" ;;
+        7) new_sni="gateway.icloud.com" ;;
+        8) new_sni="itunes.apple.com" ;;
+        9) new_sni="download.microsoft.com" ;;
+        10) new_sni="www.paypal.com" ;;
+        11)
+            read -p "Enter custom domain (e.g., www.example.com): " new_sni
+            if [[ -z "$new_sni" ]]; then
+                echo -e "${RED}Error: Domain cannot be empty.${NC}"
+                return 1
+            fi
+            ;;
+        *)
+            echo -e "${RED}Invalid choice.${NC}"
+            return 1
+            ;;
+    esac
+    
+    # Update configuration
+    jq ".inbounds = [.inbounds[] | if .tag == \"shadowtls\" then .handshake.server.server_name = \"$new_sni\" else . end]" /etc/sing-box/config.json > /tmp/sing-box-temp.json
+    mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+    
+    # Set permissions
+    chown sing-box:sing-box /etc/sing-box/config.json
+    chmod 640 /etc/sing-box/config.json
+    
+    # Format and validate configuration
+    if ! format_config; then
+        echo -e "${RED}Error: Configuration validation failed.${NC}"
+        return 1
+    fi
+    
+    # Restart service
+    echo -e "${BLUE}Restarting Sing-Box service...${NC}"
+    systemctl restart sing-box
+    
+    if systemctl is-active --quiet sing-box; then
+        echo -e "${GREEN}SNI changed successfully! New SNI: $new_sni${NC}"
+    else
+        echo -e "${RED}Error: Service failed to restart.${NC}"
+        return 1
+    fi
+}
+
+# Function to toggle IPv6
+toggle_ipv6() {
+    if [[ ! -f /etc/sing-box/config.json ]]; then
+        echo -e "${RED}Error: Configuration file not found.${NC}"
+        return 1
+    fi
+    
+    echo -e "\n${BLUE}--- Toggle IPv6 ---${NC}"
+    
+    # Check current IPv6 status
+    local current_strategy=$(jq -r '.dns.strategy' /etc/sing-box/config.json)
+    local new_strategy
+    
+    if [[ "$current_strategy" == "ipv4_only" ]]; then
+        new_strategy="prefer_ipv4"
+        echo -e "${CYAN}Current status: IPv6 disabled (ipv4_only)${NC}"
+        echo -e "${GREEN}Enabling IPv6 (prefer_ipv4)...${NC}"
+    else
+        new_strategy="ipv4_only"
+        echo -e "${CYAN}Current status: IPv6 enabled ($current_strategy)${NC}"
+        echo -e "${YELLOW}Disabling IPv6 (ipv4_only)...${NC}"
+    fi
+    
+    # Update only the global DNS strategy, not individual rules
+    jq ".dns.strategy = \"$new_strategy\"" /etc/sing-box/config.json > /tmp/sing-box-temp.json
+    mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+    
+    # Set permissions
+    chown sing-box:sing-box /etc/sing-box/config.json
+    chmod 640 /etc/sing-box/config.json
+    
+    # Format and validate configuration
+    if ! format_config; then
+        echo -e "${RED}Error: Configuration validation failed.${NC}"
+        return 1
+    fi
+    
+    # Restart service
+    echo -e "${BLUE}Restarting Sing-Box service...${NC}"
+    systemctl restart sing-box
+    
+    if systemctl is-active --quiet sing-box; then
+        if [[ "$new_strategy" == "ipv4_only" ]]; then
+            echo -e "${GREEN}IPv6 has been disabled successfully!${NC}"
+        else
+            echo -e "${GREEN}IPv6 has been enabled successfully!${NC}"
+        fi
+    else
+        echo -e "${RED}Error: Service failed to restart.${NC}"
+        return 1
+    fi
+}
+
+# Function to manage DNS strategies
+manage_dns_strategies() {
+    if [[ ! -f /etc/sing-box/config.json ]]; then
+        echo -e "${RED}Error: Configuration file not found.${NC}"
+        return 1
+    fi
+    
+    echo -e "\n${BLUE}--- DNS Strategy Management ---${NC}"
+    echo -e "${CYAN}Select what you want to configure:${NC}"
+    echo -e "1) Change global DNS strategy"
+    echo -e "2) Change streaming services strategy (Netflix, Disney, etc.)"
+    echo -e "3) Change AI services strategy (ChatGPT, etc.)"
+    echo -e "4) Change Google services strategy"
+    echo -e "5) Change China services strategy"
+    echo -e "6) View current DNS strategies"
+    
+    read -p "Enter your choice (1-6): " dns_choice
+    
+    case $dns_choice in
+        1)
+            echo -e "\n${CYAN}Select global DNS strategy:${NC}"
+            echo -e "1) ipv4_only - Force IPv4 only"
+            echo -e "2) ipv6_only - Force IPv6 only"
+            echo -e "3) prefer_ipv4 - Prefer IPv4 but allow IPv6"
+            echo -e "4) prefer_ipv6 - Prefer IPv6 but allow IPv4"
+            
+            read -p "Enter your choice (1-4): " strategy_choice
+            
+            case $strategy_choice in
+                1) new_strategy="ipv4_only" ;;
+                2) new_strategy="ipv6_only" ;;
+                3) new_strategy="prefer_ipv4" ;;
+                4) new_strategy="prefer_ipv6" ;;
+                *) echo -e "${RED}Invalid choice.${NC}"; return 1 ;;
+            esac
+            
+            jq ".dns.strategy = \"$new_strategy\"" /etc/sing-box/config.json > /tmp/sing-box-temp.json
+            mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+            
+            echo -e "${GREEN}Global DNS strategy updated to: $new_strategy${NC}"
+            ;;
+            
+        2)
+            echo -e "\n${CYAN}Select streaming services DNS strategy:${NC}"
+            echo -e "1) ipv4_only - Force IPv4 (may cause issues with some services)"
+            echo -e "2) ipv6_only - Force IPv6 (current default for streaming)"
+            echo -e "3) prefer_ipv4 - Prefer IPv4"
+            echo -e "4) prefer_ipv6 - Prefer IPv6"
+            
+            read -p "Enter your choice (1-4): " strategy_choice
+            
+            case $strategy_choice in
+                1) new_strategy="ipv4_only" ;;
+                2) new_strategy="ipv6_only" ;;
+                3) new_strategy="prefer_ipv4" ;;
+                4) new_strategy="prefer_ipv6" ;;
+                *) echo -e "${RED}Invalid choice.${NC}"; return 1 ;;
+            esac
+            
+            # Update Netflix, Disney, and media categories
+            jq ".dns.rules = [.dns.rules[] | if .rule_set | contains([\"geosite-netflix\"]) or contains([\"geosite-disney\"]) or contains([\"geosite-category-media\"]) then .strategy = \"$new_strategy\" else . end]" /etc/sing-box/config.json > /tmp/sing-box-temp.json
+            mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+            
+            echo -e "${GREEN}Streaming services DNS strategy updated to: $new_strategy${NC}"
+            ;;
+            
+        3)
+            echo -e "\n${CYAN}Select AI services DNS strategy:${NC}"
+            echo -e "1) ipv4_only - Force IPv4 (current default)"
+            echo -e "2) ipv6_only - Force IPv6"
+            echo -e "3) prefer_ipv4 - Prefer IPv4"
+            echo -e "4) prefer_ipv6 - Prefer IPv6"
+            
+            read -p "Enter your choice (1-4): " strategy_choice
+            
+            case $strategy_choice in
+                1) new_strategy="ipv4_only" ;;
+                2) new_strategy="ipv6_only" ;;
+                3) new_strategy="prefer_ipv4" ;;
+                4) new_strategy="prefer_ipv6" ;;
+                *) echo -e "${RED}Invalid choice.${NC}"; return 1 ;;
+            esac
+            
+            jq ".dns.rules = [.dns.rules[] | if .rule_set | contains([\"geosite-ai-chat-!cn\"]) then .strategy = \"$new_strategy\" else . end]" /etc/sing-box/config.json > /tmp/sing-box-temp.json
+            mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+            
+            echo -e "${GREEN}AI services DNS strategy updated to: $new_strategy${NC}"
+            ;;
+            
+        4)
+            echo -e "\n${CYAN}Select Google services DNS strategy:${NC}"
+            echo -e "1) ipv4_only - Force IPv4 (current default)"
+            echo -e "2) ipv6_only - Force IPv6"
+            echo -e "3) prefer_ipv4 - Prefer IPv4"
+            echo -e "4) prefer_ipv6 - Prefer IPv6"
+            
+            read -p "Enter your choice (1-4): " strategy_choice
+            
+            case $strategy_choice in
+                1) new_strategy="ipv4_only" ;;
+                2) new_strategy="ipv6_only" ;;
+                3) new_strategy="prefer_ipv4" ;;
+                4) new_strategy="prefer_ipv6" ;;
+                *) echo -e "${RED}Invalid choice.${NC}"; return 1 ;;
+            esac
+            
+            jq ".dns.rules = [.dns.rules[] | if .rule_set | contains([\"geosite-google\"]) then .strategy = \"$new_strategy\" else . end]" /etc/sing-box/config.json > /tmp/sing-box-temp.json
+            mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+            
+            echo -e "${GREEN}Google services DNS strategy updated to: $new_strategy${NC}"
+            ;;
+            
+        5)
+            echo -e "\n${CYAN}Select China services DNS strategy:${NC}"
+            echo -e "1) ipv4_only - Force IPv4"
+            echo -e "2) ipv6_only - Force IPv6"
+            echo -e "3) prefer_ipv4 - Prefer IPv4 (current default)"
+            echo -e "4) prefer_ipv6 - Prefer IPv6"
+            
+            read -p "Enter your choice (1-4): " strategy_choice
+            
+            case $strategy_choice in
+                1) new_strategy="ipv4_only" ;;
+                2) new_strategy="ipv6_only" ;;
+                3) new_strategy="prefer_ipv4" ;;
+                4) new_strategy="prefer_ipv6" ;;
+                *) echo -e "${RED}Invalid choice.${NC}"; return 1 ;;
+            esac
+            
+            jq ".dns.rules = [.dns.rules[] | if .rule_set | contains([\"geoip-cn\"]) or contains([\"geosite-cn\"]) then .strategy = \"$new_strategy\" else . end]" /etc/sing-box/config.json > /tmp/sing-box-temp.json
+            mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+            
+            echo -e "${GREEN}China services DNS strategy updated to: $new_strategy${NC}"
+            ;;
+            
+        6)
+            echo -e "\n${CYAN}Current DNS Strategies:${NC}"
+            echo -e "${YELLOW}Global strategy:${NC} $(jq -r '.dns.strategy' /etc/sing-box/config.json)"
+            echo -e "\n${YELLOW}Service-specific strategies:${NC}"
+            
+            # Show streaming services
+            local streaming_strategy=$(jq -r '.dns.rules[] | select(.rule_set | contains(["geosite-netflix"])) | .strategy' /etc/sing-box/config.json | head -1)
+            echo -e "Streaming (Netflix/Disney): ${streaming_strategy:-default}"
+            
+            # Show AI services
+            local ai_strategy=$(jq -r '.dns.rules[] | select(.rule_set | contains(["geosite-ai-chat-!cn"])) | .strategy' /etc/sing-box/config.json | head -1)
+            echo -e "AI services: ${ai_strategy:-default}"
+            
+            # Show Google
+            local google_strategy=$(jq -r '.dns.rules[] | select(.rule_set | contains(["geosite-google"])) | .strategy' /etc/sing-box/config.json | head -1)
+            echo -e "Google services: ${google_strategy:-default}"
+            
+            # Show China services
+            local china_strategy=$(jq -r '.dns.rules[] | select(.rule_set | contains(["geoip-cn"])) | .strategy' /etc/sing-box/config.json | head -1)
+            echo -e "China services: ${china_strategy:-default}"
+            
+            return 0
+            ;;
+            
+        *)
+            echo -e "${RED}Invalid choice.${NC}"
+            return 1
+            ;;
+    esac
+    
+    # Set permissions
+    chown sing-box:sing-box /etc/sing-box/config.json
+    chmod 640 /etc/sing-box/config.json
+    
+    # Format and validate configuration
+    if ! format_config; then
+        echo -e "${RED}Error: Configuration validation failed.${NC}"
+        return 1
+    fi
+    
+    # Restart service
+    echo -e "${BLUE}Restarting Sing-Box service...${NC}"
+    systemctl restart sing-box
+    
+    if systemctl is-active --quiet sing-box; then
+        echo -e "${GREEN}DNS strategy updated successfully!${NC}"
+    else
+        echo -e "${RED}Error: Service failed to restart.${NC}"
+        return 1
+    fi
+}
+
+# Function to change DNS servers
+change_dns_servers() {
+    if [[ ! -f /etc/sing-box/config.json ]]; then
+        echo -e "${RED}Error: Configuration file not found.${NC}"
+        return 1
+    fi
+    
+    echo -e "\n${BLUE}--- Change DNS Servers ---${NC}"
+    echo -e "${CYAN}Current DNS servers:${NC}"
+    echo -e "1) Cloudflare: 1.1.1.1"
+    echo -e "2) Google: 8.8.8.8"
+    
+    echo -e "\n${CYAN}Select DNS server to change:${NC}"
+    echo -e "1) Change primary DNS (currently Cloudflare)"
+    echo -e "2) Change secondary DNS (currently Google)"
+    echo -e "3) Add custom DNS server"
+    
+    read -p "Enter your choice (1-3): " dns_choice
+    
+    case $dns_choice in
+        1)
+            echo -e "\n${CYAN}Select new primary DNS:${NC}"
+            echo -e "1) Cloudflare (1.1.1.1)"
+            echo -e "2) Google (8.8.8.8)"
+            echo -e "3) Quad9 (9.9.9.9)"
+            echo -e "4) OpenDNS (208.67.222.222)"
+            echo -e "5) Custom"
+            
+            read -p "Enter your choice (1-5): " server_choice
+            
+            case $server_choice in
+                1) new_server="1.1.1.1" ;;
+                2) new_server="8.8.8.8" ;;
+                3) new_server="9.9.9.9" ;;
+                4) new_server="208.67.222.222" ;;
+                5) 
+                    read -p "Enter custom DNS server IP: " new_server
+                    if ! [[ "$new_server" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+                        echo -e "${RED}Invalid IP address.${NC}"
+                        return 1
+                    fi
+                    ;;
+                *) echo -e "${RED}Invalid choice.${NC}"; return 1 ;;
+            esac
+            
+            jq ".dns.servers[0].server = \"$new_server\"" /etc/sing-box/config.json > /tmp/sing-box-temp.json
+            mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+            
+            echo -e "${GREEN}Primary DNS server updated to: $new_server${NC}"
+            ;;
+            
+        2)
+            echo -e "\n${CYAN}Select new secondary DNS:${NC}"
+            echo -e "1) Cloudflare (1.1.1.1)"
+            echo -e "2) Google (8.8.8.8)"
+            echo -e "3) Quad9 (9.9.9.9)"
+            echo -e "4) OpenDNS (208.67.222.222)"
+            echo -e "5) Custom"
+            
+            read -p "Enter your choice (1-5): " server_choice
+            
+            case $server_choice in
+                1) new_server="1.1.1.1" ;;
+                2) new_server="8.8.8.8" ;;
+                3) new_server="9.9.9.9" ;;
+                4) new_server="208.67.222.222" ;;
+                5) 
+                    read -p "Enter custom DNS server IP: " new_server
+                    if ! [[ "$new_server" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+                        echo -e "${RED}Invalid IP address.${NC}"
+                        return 1
+                    fi
+                    ;;
+                *) echo -e "${RED}Invalid choice.${NC}"; return 1 ;;
+            esac
+            
+            jq ".dns.servers[1].server = \"$new_server\"" /etc/sing-box/config.json > /tmp/sing-box-temp.json
+            mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+            
+            echo -e "${GREEN}Secondary DNS server updated to: $new_server${NC}"
+            ;;
+            
+        3)
+            read -p "Enter custom DNS server IP: " new_server
+            if ! [[ "$new_server" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+                echo -e "${RED}Invalid IP address.${NC}"
+                return 1
+            fi
+            
+            read -p "Enter a tag name for this DNS server: " dns_tag
+            
+            # Add new DNS server
+            jq ".dns.servers += [{\"tag\": \"$dns_tag\", \"type\": \"https\", \"server\": \"$new_server\"}]" /etc/sing-box/config.json > /tmp/sing-box-temp.json
+            mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+            
+            echo -e "${GREEN}Custom DNS server added: $new_server (tag: $dns_tag)${NC}"
+            ;;
+            
+        *)
+            echo -e "${RED}Invalid choice.${NC}"
+            return 1
+            ;;
+    esac
+    
+    # Set permissions
+    chown sing-box:sing-box /etc/sing-box/config.json
+    chmod 640 /etc/sing-box/config.json
+    
+    # Format and validate configuration
+    if ! format_config; then
+        echo -e "${RED}Error: Configuration validation failed.${NC}"
+        return 1
+    fi
+    
+    # Restart service
+    echo -e "${BLUE}Restarting Sing-Box service...${NC}"
+    systemctl restart sing-box
+    
+    if systemctl is-active --quiet sing-box; then
+        echo -e "${GREEN}DNS servers updated successfully!${NC}"
+    else
+        echo -e "${RED}Error: Service failed to restart.${NC}"
+        return 1
+    fi
+}
+
+# Function to view configuration
+view_config() {
+    if [[ ! -f /etc/sing-box/config.json ]]; then
+        echo -e "${RED}Error: Configuration file not found.${NC}"
+        return 1
+    fi
+    
+    echo -e "\n${BLUE}--- Current Configuration ---${NC}"
+    cat /etc/sing-box/config.json | jq '.'
+}
+
+# Function to view service status
+check_status() {
+    echo -e "\n${BLUE}--- Sing-Box Service Status ---${NC}"
+    systemctl status sing-box
+}
+
+# Function to view logs
+view_logs() {
+    echo -e "\n${BLUE}--- Sing-Box Logs (Last 50 lines) ---${NC}"
+    journalctl -u sing-box -n 50 --no-pager
+}
+
+# Function to restart service
+restart_service() {
+    echo -e "\n${BLUE}--- Restarting Sing-Box Service ---${NC}"
+    systemctl restart sing-box
+    
+    if systemctl is-active --quiet sing-box; then
+        echo -e "${GREEN}Service restarted successfully!${NC}"
+    else
+        echo -e "${RED}Error: Service failed to restart.${NC}"
+        echo -e "${YELLOW}Check logs with: journalctl -u sing-box -e${NC}"
+    fi
+}
+
+# Function to change Shadowsocks method
+change_ss_method() {
+    if [[ ! -f /etc/sing-box/config.json ]]; then
+        echo -e "${RED}Error: Configuration file not found.${NC}"
+        return 1
+    fi
+    
+    echo -e "\n${BLUE}--- Change Shadowsocks Encryption Method ---${NC}"
+    
+    local current_method=$(jq -r '.inbounds[] | select(.tag == "shadowsocks") | .method' /etc/sing-box/config.json)
+    echo -e "${CYAN}Current method: $current_method${NC}"
+    
+    echo -e "\n${CYAN}Select new encryption method:${NC}"
+    echo -e "1) 2022-blake3-aes-128-gcm (Recommended)"
+    echo -e "2) 2022-blake3-aes-256-gcm"
+    echo -e "3) 2022-blake3-chacha20-poly1305"
+    echo -e "4) aes-128-gcm"
+    echo -e "5) aes-256-gcm"
+    echo -e "6) chacha20-ietf-poly1305"
+    
+    read -p "Enter your choice (1-6): " method_choice
+    
+    case $method_choice in
         1) new_method="2022-blake3-aes-128-gcm" ;;
         2) new_method="2022-blake3-aes-256-gcm" ;;
         3) new_method="2022-blake3-chacha20-poly1305" ;;
         4) new_method="aes-128-gcm" ;;
         5) new_method="aes-256-gcm" ;;
         6) new_method="chacha20-ietf-poly1305" ;;
-        0) echo -e "${BLUE}Cancelled.${NC}"; return ;;
-        *) echo -e "${RED}Invalid choice.${NC}"; return ;;
+        *)
+            echo -e "${RED}Invalid choice.${NC}"
+            return 1
+            ;;
     esac
-
-    if [[ "$new_method" == "$old_method" ]]; then
-        echo -e "${YELLOW}Selected method is the same as current. No changes made.${NC}"
-        return
-    fi
-
-    echo -e "${BLUE}Changing method to $new_method and generating a new compatible password...${NC}"
-    local new_ss_pwd
-    case "$new_method" in
-        "2022-blake3-aes-128-gcm") new_ss_pwd=$(openssl rand -base64 16) ;;
-        *) new_ss_pwd=$(openssl rand -base64 32) ;;
-    esac
-
-    cp /etc/sing-box/config.json /etc/sing-box/config.json.bak_ssmethod
-    jq --arg new_m "$new_method" --arg new_p "$new_ss_pwd" \
-        '((.inbounds[] | select(.type == "shadowsocks")).method) = $new_m |'
-        '((.inbounds[] | select(.type == "shadowsocks")).password) = $new_p'
-    /etc/sing-box/config.json.bak_ssmethod > /tmp/config.json.tmp
-
-    if [[ $? -eq 0 ]]; then
-        mv /tmp/config.json.tmp /etc/sing-box/config.json
-        echo -e "${BLUE}Formatting and validating updated configuration...${NC}"
-        if format_config; then
-            restart_sing_box
-            echo -e "${GREEN}Shadowsocks encryption method changed to: $new_method${NC}"
-            echo -e "${GREEN}A new password has also been generated for this method.${NC}"
-            echo -e "${YELLOW}Please update your client configuration file.${NC}"
-            output_node_info
-            rm /etc/sing-box/config.json.bak_ssmethod
+    
+    # Generate appropriate password based on method
+    echo -e "\n${CYAN}Shadowsocks 密码设置：${NC}"
+    echo -e "${YELLOW}自定义密码输入提示：${NC}"
+    echo -e "  - 输入自定义密码"
+    echo -e "  - 按回车键随机生成密码"
+    
+    read -p "请输入新的 Shadowsocks 密码或按回车: " new_password
+    
+    if [[ -z "$new_password" ]]; then
+        if [[ "$new_method" =~ ^2022 ]]; then
+            new_password=$(openssl rand -base64 32)
         else
-            echo -e "${RED}Error: Method change failed due to configuration error. Restoring backup...${NC}"
-            mv /etc/sing-box/config.json.bak_ssmethod /etc/sing-box/config.json
-            restart_sing_box
+            new_password=$(openssl rand -base64 16)
         fi
+        echo -e "${GREEN}随机生成密码: $new_password${NC}"
+    fi
+    
+    # Update configuration
+    jq ".inbounds = [.inbounds[] | if .tag == \"shadowsocks\" then (.method = \"$new_method\" | .password = \"$new_password\") else . end]" /etc/sing-box/config.json > /tmp/sing-box-temp.json
+    mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+    
+    # Set permissions
+    chown sing-box:sing-box /etc/sing-box/config.json
+    chmod 640 /etc/sing-box/config.json
+    
+    # Format and validate configuration
+    if ! format_config; then
+        echo -e "${RED}Error: Configuration validation failed.${NC}"
+        return 1
+    fi
+    
+    # Restart service
+    echo -e "${BLUE}Restarting Sing-Box service...${NC}"
+    systemctl restart sing-box
+    
+    if systemctl is-active --quiet sing-box; then
+        echo -e "${GREEN}Encryption method changed successfully!${NC}"
+        echo -e "${GREEN}New method: $new_method${NC}"
+        output_node_info
     else
-        echo -e "${RED}Error: Failed to update method/password in JSON using jq.${NC}"
-        rm -f /tmp/config.json.tmp
+        echo -e "${RED}Error: Service failed to restart.${NC}"
+        return 1
     fi
 }
 
-# Function to change service-specific DNS strategy in dns.rules
-change_service_dns_strategy() {
-    echo -e "\n${BLUE}--- Change Service-Specific DNS Strategy (in dns.rules) ---${NC}"
-    if [ ! -f /etc/sing-box/config.json ]; then echo -e "${RED}Error: /etc/sing-box/config.json not found.${NC}"; return; fi
-    # get_ip_info # Not strictly needed here as we are not filtering options based on live IP state anymore
+# Main menu
+show_menu() {
+    clear
+    echo -e "${BLUE}=====================================${NC}"
+    echo -e "${CYAN}    Sing-Box Management Script${NC}"
+    echo -e "${BLUE}=====================================${NC}"
+    echo -e "${GREEN}1)${NC} Install Sing-Box"
+    echo -e "${GREEN}2)${NC} Uninstall Sing-Box"
+    echo -e "${GREEN}3)${NC} View Node Information"
+    echo -e "${GREEN}4)${NC} View Configuration"
+    echo -e "${GREEN}5)${NC} View Service Status"
+    echo -e "${GREEN}6)${NC} View Logs"
+    echo -e "${GREEN}7)${NC} Restart Service"
+    echo -e "${GREEN}8)${NC} Change Port"
+    echo -e "${GREEN}9)${NC} Change All Passwords"
+    echo -e "${GREEN}10)${NC} Change ShadowTLS Password"
+    echo -e "${GREEN}11)${NC} Change ShadowTLS SNI"
+    echo -e "${GREEN}12)${NC} Change Shadowsocks Method"
+    echo -e "${GREEN}13)${NC} Toggle IPv6"
+    echo -e "${GREEN}14)${NC} Manage DNS Strategies"
+    echo -e "${GREEN}15)${NC} Change DNS Servers"
+    echo -e "${GREEN}0)${NC} Exit"
+    echo -e "${BLUE}=====================================${NC}"
+}
 
-    local services_map=(
-        "AI Chat (!CN)|geosite-ai-chat-!cn|dns_google"
-        "Google|geosite-google|dns_google"
-        "Netflix|geosite-netflix|dns_cf"
-        "Disney|geosite-disney|dns_cf"
-        "Spotify|geosite-spotify|dns_cf"
-        "General Media (category)|geosite-category-media|dns_cf"
-        "China (geoip-cn, geosite-cn)|geoip-cn|dns_cf" # Simplified to just geoip-cn for jq matching ease, will apply to both if structure is consistent
-        # Note: The last field is the default *server* tag if we need to reconstruct a rule, or for reference.
-    )
+# Main execution
+main() {
+    check_root
+    check_system
     
-    # These are the strategies the user can pick from.
-    local available_strategies=("prefer_ipv4" "prefer_ipv6" "ipv4_only" "ipv6_only")
-
     while true; do
-        echo -e "\n${YELLOW}Select a service category to modify its DNS resolution strategy:${NC}"
-        for i in "${!services_map[@]}"; do
-            local display_name=$(echo "${services_map[$i]}" | cut -d'|' -f1)
-            local rule_set_tag_jq=$(echo "${services_map[$i]}" | cut -d'|' -f2)
-            # Try to find the rule by the first rule_set tag if multiple exist (e.g., geoip-cn, geosite-cn)
-            local first_rs_tag=$(echo "$rule_set_tag_jq" | cut -d',' -f1)
-            
-            local current_strategy=$(jq -r --arg rs "$first_rs_tag" '
-                .dns.rules[] | 
-                select(
-                    .rule_set != null and (
-                        if (.rule_set | type) == "array" then 
-                            .rule_set[0] == $rs 
-                        elif (.rule_set | type) == "string" then 
-                            .rule_set == $rs 
-                        else 
-                            false 
-                        end
-                    )
-                ) | .strategy // "not set"
-            ' /etc/sing-box/config.json)
-            local current_server=$(jq -r --arg rs "$first_rs_tag" '
-                .dns.rules[] | 
-                select(
-                    .rule_set != null and (
-                        if (.rule_set | type) == "array" then 
-                            .rule_set[0] == $rs 
-                        elif (.rule_set | type) == "string" then 
-                            .rule_set == $rs 
-                        else 
-                            false 
-                        end
-                    )
-                ) | .server // "not set"
-            ' /etc/sing-box/config.json)
-            echo -e "  ${CYAN}$((i+1))) ${display_name}${NC} (DNS Server: ${MAGENTA}${current_server}${NC}, Strategy: ${ORANGE}${current_strategy}${NC})"
-        done
-        echo -e "  ${CYAN}0) Return to Previous Menu${NC}"
-        read -p "$(echo -e "${YELLOW}Enter your choice [0-${#services_map[@]}]: ${NC}")" service_choice
-
-        if ! [[ "$service_choice" =~ ^[0-9]+$ ]] || [[ "$service_choice" -lt 0 || "$service_choice" -gt ${#services_map[@]} ]]; then
-            echo -e "${RED}Invalid choice. Try again.${NC}"
-            continue
-        fi
-        if [[ $service_choice -eq 0 ]]; then return; fi
-
-        local selected_service_entry=${services_map[$((service_choice-1))]} 
-        local service_display_name=$(echo "$selected_service_entry" | cut -d'|' -f1)
-        local rule_set_tag_for_jq_match=$(echo "$selected_service_entry" | cut -d'|' -f2 | cut -d',' -f1) # Use first tag for matching rule
-            
-        echo -e "\n${YELLOW}Select DNS strategy for '${service_display_name}':${NC}"
-        for i in "${!available_strategies[@]}"; do
-            echo -e "  ${CYAN}$((i+1))) ${available_strategies[$i]}${NC}"
-        done
-        echo -e "  ${CYAN}0) Cancel this change${NC}"
-        read -p "$(echo -e "${YELLOW}Enter strategy choice [0-${#available_strategies[@]}]: ${NC}")" strategy_choice_idx
-
-        if ! [[ "$strategy_choice_idx" =~ ^[0-9]+$ ]] || [[ "$strategy_choice_idx" -lt 0 || "$strategy_choice_idx" -gt ${#available_strategies[@]} ]]; then
-            echo -e "${RED}Invalid strategy choice. Try again.${NC}"
-            continue
-        fi
-        if [[ $strategy_choice_idx -eq 0 ]]; then echo -e "${BLUE}Cancelled change for ${service_display_name}.${NC}"; continue; fi
-
-        local selected_strategy=${available_strategies[$((strategy_choice_idx-1))]} 
+        show_menu
+        read -p "Enter your choice: " choice
         
-        cp /etc/sing-box/config.json /etc/sing-box/config.json.bak_dns_strat
-        
-        # jq query to update the strategy for the rule matching the first rule_set tag
-        # This assumes rule_set is an array or a single string.
-        local jq_query='
-            .dns.rules |= map(
-                if (
-                    .rule_set != null and (
-                        if (.rule_set | type) == "array" then 
-                            .rule_set[0] == $rs_tag 
-                        elif (.rule_set | type) == "string" then 
-                            .rule_set == $rs_tag 
-                        else 
-                            false 
-                        end
-                    )
-                ) then
-                    .strategy = $new_strategy 
-                else
-                    . 
-                end
-            )'
-        
-        jq --arg rs_tag "$rule_set_tag_for_jq_match" --arg new_strategy "$selected_strategy" "$jq_query" \
-            /etc/sing-box/config.json.bak_dns_strat > /tmp/config.json.tmp
-
-        if [[ $? -eq 0 ]]; then
-            mv /tmp/config.json.tmp /etc/sing-box/config.json
-            echo -e "${BLUE}Formatting and validating updated configuration...${NC}"
-            if format_config; then
-                echo -e "${GREEN}Successfully updated DNS strategy for '${service_display_name}' to '${selected_strategy}'.${NC}"
-                systemctl restart sing-box
-                echo -e "\n${YELLOW}Current DNS rule for '${service_display_name}':${NC}"
-                jq --arg rs "$rule_set_tag_for_jq_match" '
-                    .dns.rules[] | 
-                    select(
-                        .rule_set != null and (
-                            if (.rule_set | type) == "array" then 
-                                .rule_set[0] == $rs 
-                            elif (.rule_set | type) == "string" then 
-                                .rule_set == $rs 
-                            else 
-                                false 
-                            end
-                        )
-                    )
-                ' /etc/sing-box/config.json
-                rm /etc/sing-box/config.json.bak_dns_strat
-            else
-                echo -e "${RED}Error: Strategy update failed due to configuration error. Restoring backup...${NC}"
-                mv /etc/sing-box/config.json.bak_dns_strat /etc/sing-box/config.json
-                restart_sing_box
-            fi
-        else
-            echo -e "${RED}Error: Failed to update DNS strategy using jq. Exit status: $?${NC}"
-            cat /tmp/config.json.tmp # Show what jq produced if it failed but still wrote to tmp
-            rm -f /tmp/config.json.tmp
-        fi
-        read -p "$(echo -e "\n${BLUE}Press Enter to continue...${NC}")"
-    done
-}
-
-# Function to change ShadowTLS wildcard SNI mode
-change_wildcard_sni() {
-    echo -e "\n${BLUE}--- Change ShadowTLS Wildcard SNI Mode ---${NC}"
-    if [ ! -f /etc/sing-box/config.json ]; then echo -e "${RED}Error: /etc/sing-box/config.json not found.${NC}"; return; fi
-
-    local current_wildcard_sni=$(jq -r '(.inbounds[] | select(.type == "shadowtls") | .wildcard_sni) // "not_applicable"' /etc/sing-box/config.json)
-
-    if [[ "$current_wildcard_sni" == "not_applicable" ]]; then
-        echo -e "${YELLOW}ShadowTLS is not installed. Wildcard SNI mode cannot be changed.${NC}"
-        return
-    fi
-
-    echo -e "${BLUE}Current wildcard SNI mode: ${CYAN}$current_wildcard_sni${NC}"
-    
-    echo -e "\n${YELLOW}Select new ShadowTLS wildcard SNI mode:${NC}"
-    echo -e "  ${CYAN}1) off: Disable wildcard SNI (strict SNI match)${NC}"
-    echo -e "  ${CYAN}2) authed: Change target to SNI:443 for authenticated connections (Recommended)${NC}"
-    echo -e "  ${CYAN}3) all: Change target to SNI:443 for all connections (less common)${NC}"
-    echo -e "  ${CYAN}0) Cancel${NC}"
-    read -p "$(echo -e "${YELLOW}Choose an option [0-3] (Enter to keep current: $current_wildcard_sni): ${NC}")" wildcard_sni_choice
-    
-    local new_wildcard_sni=""
-    case "$wildcard_sni_choice" in
-        1) new_wildcard_sni="off" ;;
-        2) new_wildcard_sni="authed" ;;
-        3) new_wildcard_sni="all" ;;
-        0) echo -e "${BLUE}Cancelled.${NC}"; return ;;
-        "") echo -e "${YELLOW}No change. Keeping current setting: $current_wildcard_sni${NC}"; return ;;
-        *) echo -e "${RED}Invalid choice.${NC}"; return ;;
-    esac
-    
-    if [[ "$new_wildcard_sni" == "$current_wildcard_sni" ]]; then
-        echo -e "${YELLOW}Selected mode is the same as current. No changes made.${NC}"
-        return
-    fi
-
-    cp /etc/sing-box/config.json /etc/sing-box/config.json.bak_sni
-    jq --arg sni "$new_wildcard_sni" '(.inbounds[] | select(.type == "shadowtls")).wildcard_sni = $sni' /etc/sing-box/config.json.bak_sni > /tmp/config.json.tmp
-    
-    if [[ $? -eq 0 ]]; then
-        mv /tmp/config.json.tmp /etc/sing-box/config.json
-        echo -e "${BLUE}Formatting and validating updated configuration...${NC}"
-        if format_config; then
-            echo -e "${GREEN}Wildcard SNI mode changed to: $new_wildcard_sni${NC}"
-            restart_sing_box
-            rm /etc/sing-box/config.json.bak_sni
-        else
-            echo -e "${RED}Error: Wildcard SNI update failed due to configuration error. Restoring backup...${NC}"
-            mv /etc/sing-box/config.json.bak_sni /etc/sing-box/config.json
-            restart_sing_box
-        fi
-    else
-        echo -e "${RED}Error: Failed to update wildcard SNI using jq.${NC}"
-        rm -f /tmp/config.json.tmp
-    fi
-}
-
-# Function to modify Sing-Box configuration
-modify_configuration() {
-    if ! command -v sing-box >/dev/null 2>&1 || [ ! -f /etc/sing-box/config.json ]; then
-        echo -e "${RED}Sing-Box is not installed or config file is missing. Please install/reinstall it first.${NC}"
-        return
-    fi
-
-    local shadowtls_installed=0
-    jq -e '.inbounds[] | select(.type == "shadowtls")' /etc/sing-box/config.json >/dev/null 2>&1 && shadowtls_installed=1
-
-    while true; do
-        echo -e "\n${GREEN}--- Modify Sing-Box Configuration ---${NC}"
-        echo -e "${YELLOW}Select an option to change:${NC}"
-        
-        if [[ $shadowtls_installed -eq 1 ]]; then
-            echo -e "  ${CYAN}1) Change ShadowTLS Port${NC}"
-            echo -e "  ${CYAN}2) Reset Passwords (ShadowTLS & Shadowsocks)${NC}"
-            echo -e "  ${CYAN}3) Change Shadowsocks Encryption Method${NC}"
-            echo -e "  ${CYAN}4) Change Service-Specific DNS Strategy${NC}"
-            echo -e "  ${CYAN}5) Change ShadowTLS Wildcard SNI Mode${NC}"
-            echo -e "  ${CYAN}0) Return to Main Menu${NC}"
-            read -p "$(echo -e "${YELLOW}Enter your choice [0-5]: ${NC}")" confAnswer
-        else
-            echo -e "  ${CYAN}1) Change Shadowsocks Public Port${NC}"
-            echo -e "  ${CYAN}2) Reset Shadowsocks Password${NC}"
-            echo -e "  ${CYAN}3) Change Shadowsocks Encryption Method${NC}"
-            echo -e "  ${CYAN}4) Change Service-Specific DNS Strategy${NC}"
-            # Option 5 (Wildcard SNI) is omitted if ShadowTLS is not installed
-            echo -e "  ${CYAN}0) Return to Main Menu${NC}"
-            read -p "$(echo -e "${YELLOW}Enter your choice [0-4]: ${NC}")" confAnswer
-        fi
-
-        case $confAnswer in
-            1 ) change_port ;;
-            2 ) change_passwords ;;
-            3 ) change_ss_method ;;
-            4 ) change_service_dns_strategy ;;
-            5 ) if [[ $shadowtls_installed -eq 1 ]]; then change_wildcard_sni; else echo -e "${RED}Invalid option. ShadowTLS not installed.${NC}"; fi ;;
-            0 ) return ;;
-            * ) echo -e "${RED}Invalid choice. Please try again.${NC}" ;;
+        case $choice in
+            1)
+                install_dependencies
+                get_ip_info
+                install_sing_box
+                ;;
+            2)
+                uninstall_sing_box
+                ;;
+            3)
+                output_node_info
+                ;;
+            4)
+                view_config
+                ;;
+            5)
+                check_status
+                ;;
+            6)
+                view_logs
+                ;;
+            7)
+                restart_service
+                ;;
+            8)
+                change_port
+                ;;
+            9)
+                change_passwords
+                ;;
+            10)
+                change_shadowtls_password
+                ;;
+            11)
+                change_shadowtls_sni
+                ;;
+            12)
+                change_ss_method
+                ;;
+            13)
+                toggle_ipv6
+                ;;
+            14)
+                manage_dns_strategies
+                ;;
+            15)
+                change_dns_servers
+                ;;
+            0)
+                echo -e "${GREEN}Exiting...${NC}"
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}Invalid choice. Please try again.${NC}"
+                ;;
         esac
-        [[ "$confAnswer" != "0" ]] && read -p "$(echo -e "\n${BLUE}Press Enter to continue...${NC}")"
+        
+        echo -e "\n${YELLOW}Press Enter to continue...${NC}"
+        read
     done
 }
 
-# Function to show current configuration (node info)
-show_configuration() {
-    if ! command -v sing-box >/dev/null 2>&1 || [ ! -f /etc/sing-box/config.json ]; then
-        echo -e "${RED}Sing-Box is not installed or config file is missing. Please install it first.${NC}"
-        return
-    fi
-    output_node_info
-}
-
-# Main menu function
-menu() {
-    while true; do
-        clear
-        echo -e "${MAGENTA}┌─────────────────────────────────────────┐${NC}"
-        echo -e "${MAGENTA}│   ShadowTLS + Shadowsocks Manager       │${NC}"
-        echo -e "${MAGENTA}│          Powered by Sing-Box            │${NC}"
-        echo -e "${MAGENTA}└─────────────────────────────────────────┘${NC}"
-        echo -e "----------------------------------------"
-        echo -e "${GREEN}  1) Install Sing-Box${NC}"
-        echo -e "${GREEN}  2) Uninstall Sing-Box${NC}"
-        echo -e "${GREEN}  3) Manage Sing-Box Service${NC}"
-        echo -e "${GREEN}  4) Modify Configuration${NC}"
-        echo -e "${GREEN}  5) Display Node Information${NC}"
-        echo -e "${RED}  0) Exit Script${NC}"
-        echo -e "----------------------------------------"
-        read -p "$(echo -e "${YELLOW}Enter your choice [0-5]: ${NC}")" choice
-
-        case "$choice" in
-            1) install_sing_box ;;
-            2) uninstall_sing_box ;;
-            3) manage_sing_box ;;
-            4) modify_configuration ;;
-            5) show_configuration ;;
-            0) echo -e "${BLUE}Exiting script. Goodbye!${NC}"; exit 0 ;;
-            *) echo -e "${RED}Invalid option. Please try again.${NC}" ;;
-        esac
-        [[ "$choice" != "0" ]] && read -p "$(echo -e "\n${BLUE}Press Enter to return to the main menu...${NC}")"
-    done
-}
-
-# --- Main script execution ---
-trap 'echo -e "${RED}\nScript interrupted. Exiting cleanly.${NC}"; rm -f /tmp/config.json.* /etc/sing-box/config.json.bak_*; exit 1' INT TERM
-clear
-echo -e "${BLUE}Welcome to the ShadowTLS + Shadowsocks Manager Script!${NC}"
-
-check_root
-check_system
-install_dependencies 
-
-menu
-
-exit 0
+# Run main function
+main "$@"
