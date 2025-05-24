@@ -1211,6 +1211,23 @@ manage_dns_strategies() {
         return 1
     fi
     
+    # Check if config file is valid JSON
+    if ! jq empty /etc/sing-box/config.json >/dev/null 2>&1; then
+        echo -e "${RED}Error: Configuration file is corrupted or invalid JSON.${NC}"
+        echo -e "${YELLOW}Attempting to restore from backup...${NC}"
+        
+        if [[ -f /etc/sing-box/config.json.bak ]]; then
+            cp /etc/sing-box/config.json.bak /etc/sing-box/config.json
+            echo -e "${GREEN}Configuration restored from backup.${NC}"
+        else
+            echo -e "${RED}No backup found. Please reinstall Sing-Box.${NC}"
+            return 1
+        fi
+    fi
+    
+    # Create backup before making changes
+    cp /etc/sing-box/config.json /etc/sing-box/config.json.bak.$(date +%Y%m%d_%H%M%S)
+    
     echo -e "\n${BLUE}--- DNS Strategy Management ---${NC}"
     echo -e "${CYAN}Select what you want to configure:${NC}"
     echo -e "1) Change global DNS strategy"
@@ -1264,7 +1281,7 @@ manage_dns_strategies() {
             esac
             
             # Update Netflix, Disney, and media categories
-            jq ".dns.rules = [.dns.rules[] | if .rule_set | contains([\"geosite-netflix\"]) or contains([\"geosite-disney\"]) or contains([\"geosite-category-media\"]) then .strategy = \"$new_strategy\" else . end]" /etc/sing-box/config.json > /tmp/sing-box-temp.json
+            jq ".dns.rules = [.dns.rules[] | if (.rule_set | type == \"array\" and (contains([\"geosite-netflix\"]) or contains([\"geosite-disney\"]) or contains([\"geosite-category-media\"]))) or (.rule_set | type == \"string\" and (. == \"geosite-netflix\" or . == \"geosite-disney\" or . == \"geosite-category-media\")) then .strategy = \"$new_strategy\" else . end]" /etc/sing-box/config.json > /tmp/sing-box-temp.json
             mv /tmp/sing-box-temp.json /etc/sing-box/config.json
             
             echo -e "${GREEN}Streaming services DNS strategy updated to: $new_strategy${NC}"
@@ -1287,7 +1304,7 @@ manage_dns_strategies() {
                 *) echo -e "${RED}Invalid choice.${NC}"; return 1 ;;
             esac
             
-            jq ".dns.rules = [.dns.rules[] | if .rule_set | contains([\"geosite-ai-chat-!cn\"]) then .strategy = \"$new_strategy\" else . end]" /etc/sing-box/config.json > /tmp/sing-box-temp.json
+            jq ".dns.rules = [.dns.rules[] | if (.rule_set | type == \"array\" and contains([\"geosite-ai-chat-!cn\"])) or (.rule_set | type == \"string\" and . == \"geosite-ai-chat-!cn\") then .strategy = \"$new_strategy\" else . end]" /etc/sing-box/config.json > /tmp/sing-box-temp.json
             mv /tmp/sing-box-temp.json /etc/sing-box/config.json
             
             echo -e "${GREEN}AI services DNS strategy updated to: $new_strategy${NC}"
@@ -1310,7 +1327,7 @@ manage_dns_strategies() {
                 *) echo -e "${RED}Invalid choice.${NC}"; return 1 ;;
             esac
             
-            jq ".dns.rules = [.dns.rules[] | if .rule_set | contains([\"geosite-google\"]) then .strategy = \"$new_strategy\" else . end]" /etc/sing-box/config.json > /tmp/sing-box-temp.json
+            jq ".dns.rules = [.dns.rules[] | if (.rule_set | type == \"array\" and contains([\"geosite-google\"])) or (.rule_set | type == \"string\" and . == \"geosite-google\") then .strategy = \"$new_strategy\" else . end]" /etc/sing-box/config.json > /tmp/sing-box-temp.json
             mv /tmp/sing-box-temp.json /etc/sing-box/config.json
             
             echo -e "${GREEN}Google services DNS strategy updated to: $new_strategy${NC}"
@@ -1333,7 +1350,7 @@ manage_dns_strategies() {
                 *) echo -e "${RED}Invalid choice.${NC}"; return 1 ;;
             esac
             
-            jq ".dns.rules = [.dns.rules[] | if .rule_set | contains([\"geoip-cn\"]) or contains([\"geosite-cn\"]) then .strategy = \"$new_strategy\" else . end]" /etc/sing-box/config.json > /tmp/sing-box-temp.json
+            jq ".dns.rules = [.dns.rules[] | if (.rule_set | type == \"array\" and (contains([\"geoip-cn\"]) or contains([\"geosite-cn\"]))) or (.rule_set | type == \"string\" and (. == \"geoip-cn\" or . == \"geosite-cn\")) then .strategy = \"$new_strategy\" else . end]" /etc/sing-box/config.json > /tmp/sing-box-temp.json
             mv /tmp/sing-box-temp.json /etc/sing-box/config.json
             
             echo -e "${GREEN}China services DNS strategy updated to: $new_strategy${NC}"
@@ -1345,19 +1362,19 @@ manage_dns_strategies() {
             echo -e "\n${YELLOW}Service-specific strategies:${NC}"
             
             # Show streaming services
-            local streaming_strategy=$(jq -r '.dns.rules[] | select(.rule_set | contains(["geosite-netflix"])) | .strategy' /etc/sing-box/config.json | head -1)
+            local streaming_strategy=$(jq -r '.dns.rules[] | select((.rule_set | type == "array" and contains(["geosite-netflix"])) or (.rule_set | type == "string" and . == "geosite-netflix")) | .strategy' /etc/sing-box/config.json | head -1)
             echo -e "Streaming (Netflix/Disney): ${streaming_strategy:-default}"
             
             # Show AI services
-            local ai_strategy=$(jq -r '.dns.rules[] | select(.rule_set | contains(["geosite-ai-chat-!cn"])) | .strategy' /etc/sing-box/config.json | head -1)
+            local ai_strategy=$(jq -r '.dns.rules[] | select((.rule_set | type == "array" and contains(["geosite-ai-chat-!cn"])) or (.rule_set | type == "string" and . == "geosite-ai-chat-!cn")) | .strategy' /etc/sing-box/config.json | head -1)
             echo -e "AI services: ${ai_strategy:-default}"
             
             # Show Google
-            local google_strategy=$(jq -r '.dns.rules[] | select(.rule_set | contains(["geosite-google"])) | .strategy' /etc/sing-box/config.json | head -1)
+            local google_strategy=$(jq -r '.dns.rules[] | select((.rule_set | type == "array" and contains(["geosite-google"])) or (.rule_set | type == "string" and . == "geosite-google")) | .strategy' /etc/sing-box/config.json | head -1)
             echo -e "Google services: ${google_strategy:-default}"
             
             # Show China services
-            local china_strategy=$(jq -r '.dns.rules[] | select(.rule_set | contains(["geoip-cn"])) | .strategy' /etc/sing-box/config.json | head -1)
+            local china_strategy=$(jq -r '.dns.rules[] | select((.rule_set | type == "array" and (contains(["geoip-cn"]) or contains(["geosite-cn"]))) or (.rule_set | type == "string" and (. == "geoip-cn" or . == "geosite-cn"))) | .strategy' /etc/sing-box/config.json | head -1)
             echo -e "China services: ${china_strategy:-default}"
             
             return 0
