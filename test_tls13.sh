@@ -11,14 +11,15 @@ echo "================================================"
 
 # List of domains to test
 domains=(
-    "p9-dy.byteimg.com"
     "mp.weixin.qq.com"
     "coding.net"
     "upyun.com"
     "sns-video-hw.xhscdn.com"
     "sns-img-qc.xhscdn.com"
     "sns-video-qn.xhscdn.com"
+    "p9-dy.byteimg.com"
     "p6-dy.byteimg.com"
+    "p11.douyinpic.com"
     "feishu.cn"
     "douyin.com"
     "toutiao.com"
@@ -50,14 +51,29 @@ test_tls13() {
 
 # Test each domain
 supported_domains=()
+unsupported_domains=()
 for domain in "${domains[@]}"; do
     if test_tls13 "$domain"; then
         supported_domains+=("$domain")
+    else
+        unsupported_domains+=("$domain")
     fi
 done
 
 echo ""
-echo -e "${GREEN}Domains supporting TLS 1.3:${NC}"
+echo -e "${GREEN}=== Domains supporting TLS 1.3 (${#supported_domains[@]} domains) ===${NC}"
 for domain in "${supported_domains[@]}"; do
-    echo "  - $domain"
-done 
+    echo -e "  ${GREEN}✓${NC} $domain"
+done
+
+echo ""
+echo -e "${RED}=== Domains NOT supporting TLS 1.3 (${#unsupported_domains[@]} domains) ===${NC}"
+for domain in "${unsupported_domains[@]}"; do
+    echo -e "  ${RED}✗${NC} $domain"
+done
+
+echo ""
+echo -e "${YELLOW}Summary:${NC}"
+echo -e "  Total tested: ${#domains[@]}"
+echo -e "  ${GREEN}TLS 1.3 supported: ${#supported_domains[@]}${NC}"
+echo -e "  ${RED}TLS 1.3 not supported: ${#unsupported_domains[@]}${NC}" 

@@ -454,16 +454,18 @@ install_sing_box() {
         echo -e "  ${CYAN}6) sns-img-qc.xhscdn.com (XiaoHongShu Image)${NC}"
         echo -e "  ${CYAN}7) sns-video-qn.xhscdn.com (XiaoHongShu Video)${NC}"
         echo -e "  ${CYAN}8) p6-dy.byteimg.com (ByteDance CDN)${NC}"
-        echo -e "  ${CYAN}9) feishu.cn (Feishu/Lark)${NC}"
-        echo -e "  ${CYAN}10) douyin.com${NC}"
-        echo -e "  ${CYAN}11) toutiao.com${NC}"
-        echo -e "  ${CYAN}12) v6-dy-y.ixigua.com${NC}"
-        echo -e "  ${CYAN}13) hls3-akm.douyucdn.cn (Douyu CDN)${NC}"
-        echo -e "  ${CYAN}14) publicassets.cdn-apple.com (Apple CDN)${NC}"
-        echo -e "  ${CYAN}15) weather-data.apple.com${NC}"
-        echo -e "  ${CYAN}16) Custom domain${NC}"
+        echo -e "  ${CYAN}9) p11.douyinpic.com (Douyin Image CDN)${NC}"
+        echo -e "  ${CYAN}10) feishu.cn (Feishu/Lark)${NC}"
+        echo -e "  ${CYAN}11) douyin.com${NC}"
+        echo -e "  ${CYAN}12) toutiao.com${NC}"
+        echo -e "  ${CYAN}13) v6-dy-y.ixigua.com${NC}"
+        echo -e "  ${CYAN}14) hls3-akm.douyucdn.cn (Douyu CDN)${NC}"
+        echo -e "  ${CYAN}15) publicassets.cdn-apple.com (Apple CDN)${NC}"
+        echo -e "  ${CYAN}16) weather-data.apple.com${NC}"
+        echo -e "  ${CYAN}17) gateway.icloud.com (Most Stable)${NC}"
+        echo -e "  ${CYAN}18) Custom domain${NC}"
         
-        read -p "$(echo -e "${YELLOW}Enter your choice [1-16] (Default: 1): ${NC}")" sni_choice
+        read -p "$(echo -e "${YELLOW}Enter your choice [1-18] (Default: 1): ${NC}")" sni_choice
         case "$sni_choice" in
             2) proxysite="mp.weixin.qq.com" ;;
             3) proxysite="coding.net" ;;
@@ -472,14 +474,16 @@ install_sing_box() {
             6) proxysite="sns-img-qc.xhscdn.com" ;;
             7) proxysite="sns-video-qn.xhscdn.com" ;;
             8) proxysite="p6-dy.byteimg.com" ;;
-            9) proxysite="feishu.cn" ;;
-            10) proxysite="douyin.com" ;;
-            11) proxysite="toutiao.com" ;;
-            12) proxysite="v6-dy-y.ixigua.com" ;;
-            13) proxysite="hls3-akm.douyucdn.cn" ;;
-            14) proxysite="publicassets.cdn-apple.com" ;;
-            15) proxysite="weather-data.apple.com" ;;
-            16) 
+            9) proxysite="p11.douyinpic.com" ;;
+            10) proxysite="feishu.cn" ;;
+            11) proxysite="douyin.com" ;;
+            12) proxysite="toutiao.com" ;;
+            13) proxysite="v6-dy-y.ixigua.com" ;;
+            14) proxysite="hls3-akm.douyucdn.cn" ;;
+            15) proxysite="publicassets.cdn-apple.com" ;;
+            16) proxysite="weather-data.apple.com" ;;
+            17) proxysite="gateway.icloud.com" ;;
+            18) 
                 read -p "$(echo -e "${YELLOW}Enter custom domain: ${NC}")" proxysite
                 if [[ -z "$proxysite" ]]; then
                     proxysite="p9-dy.byteimg.com"
@@ -1245,16 +1249,18 @@ change_shadowtls_sni() {
     echo -e "6) sns-img-qc.xhscdn.com (XiaoHongShu Image)"
     echo -e "7) sns-video-qn.xhscdn.com (XiaoHongShu Video)"
     echo -e "8) p6-dy.byteimg.com (ByteDance CDN)"
-    echo -e "9) feishu.cn (Feishu/Lark)"
-    echo -e "10) douyin.com"
-    echo -e "11) toutiao.com"
-    echo -e "12) v6-dy-y.ixigua.com"
-    echo -e "13) hls3-akm.douyucdn.cn (Douyu CDN)"
-    echo -e "14) publicassets.cdn-apple.com (Apple CDN)"
-    echo -e "15) weather-data.apple.com"
-    echo -e "16) Custom domain"
+    echo -e "9) p11.douyinpic.com (Douyin Image CDN)"
+    echo -e "10) feishu.cn (Feishu/Lark)"
+    echo -e "11) douyin.com"
+    echo -e "12) toutiao.com"
+    echo -e "13) v6-dy-y.ixigua.com"
+    echo -e "14) hls3-akm.douyucdn.cn (Douyu CDN)"
+    echo -e "15) publicassets.cdn-apple.com (Apple CDN)"
+    echo -e "16) weather-data.apple.com"
+    echo -e "17) gateway.icloud.com (Most Stable)"
+    echo -e "18) Custom domain"
     
-    read -p "Enter your choice (1-16): " sni_choice
+    read -p "Enter your choice (1-18): " sni_choice
     
     case $sni_choice in
         1) new_sni="p9-dy.byteimg.com" ;;
@@ -1265,14 +1271,16 @@ change_shadowtls_sni() {
         6) new_sni="sns-img-qc.xhscdn.com" ;;
         7) new_sni="sns-video-qn.xhscdn.com" ;;
         8) new_sni="p6-dy.byteimg.com" ;;
-        9) new_sni="feishu.cn" ;;
-        10) new_sni="douyin.com" ;;
-        11) new_sni="toutiao.com" ;;
-        12) new_sni="v6-dy-y.ixigua.com" ;;
-        13) new_sni="hls3-akm.douyucdn.cn" ;;
-        14) new_sni="publicassets.cdn-apple.com" ;;
-        15) new_sni="weather-data.apple.com" ;;
-        16)
+        9) new_sni="p11.douyinpic.com" ;;
+        10) new_sni="feishu.cn" ;;
+        11) new_sni="douyin.com" ;;
+        12) new_sni="toutiao.com" ;;
+        13) new_sni="v6-dy-y.ixigua.com" ;;
+        14) new_sni="hls3-akm.douyucdn.cn" ;;
+        15) new_sni="publicassets.cdn-apple.com" ;;
+        16) new_sni="weather-data.apple.com" ;;
+        17) new_sni="gateway.icloud.com" ;;
+        18)
             read -p "Enter custom domain (e.g., www.example.com): " new_sni
             if [[ -z "$new_sni" ]]; then
                 echo -e "${RED}Error: Domain cannot be empty.${NC}"
