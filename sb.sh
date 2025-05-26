@@ -446,7 +446,7 @@ install_sing_box() {
     local wildcard_sni=""
     if [[ $use_shadowtls -eq 1 ]]; then
         echo -e "${YELLOW}Select ShadowTLS SNI:${NC}"
-        echo -e "  ${CYAN}1) p9-dy.byteimg.com (ByteDance CDN - Default)${NC}"
+        echo -e "  ${CYAN}1) p11.douyinpic.com (Douyin Image CDN - Default)${NC}"
         echo -e "  ${CYAN}2) mp.weixin.qq.com (WeChat)${NC}"
         echo -e "  ${CYAN}3) coding.net${NC}"
         echo -e "  ${CYAN}4) upyun.com (UpYun CDN)${NC}"
@@ -454,7 +454,7 @@ install_sing_box() {
         echo -e "  ${CYAN}6) sns-img-qc.xhscdn.com (XiaoHongShu Image)${NC}"
         echo -e "  ${CYAN}7) sns-video-qn.xhscdn.com (XiaoHongShu Video)${NC}"
         echo -e "  ${CYAN}8) p6-dy.byteimg.com (ByteDance CDN)${NC}"
-        echo -e "  ${CYAN}9) p11.douyinpic.com (Douyin Image CDN)${NC}"
+        echo -e "  ${CYAN}9) p9-dy.byteimg.com (ByteDance CDN)${NC}"
         echo -e "  ${CYAN}10) feishu.cn (Feishu/Lark)${NC}"
         echo -e "  ${CYAN}11) douyin.com${NC}"
         echo -e "  ${CYAN}12) toutiao.com${NC}"
@@ -474,7 +474,7 @@ install_sing_box() {
             6) proxysite="sns-img-qc.xhscdn.com" ;;
             7) proxysite="sns-video-qn.xhscdn.com" ;;
             8) proxysite="p6-dy.byteimg.com" ;;
-            9) proxysite="p11.douyinpic.com" ;;
+            9) proxysite="p9-dy.byteimg.com" ;;
             10) proxysite="feishu.cn" ;;
             11) proxysite="douyin.com" ;;
             12) proxysite="toutiao.com" ;;
@@ -486,10 +486,10 @@ install_sing_box() {
             18) 
                 read -p "$(echo -e "${YELLOW}Enter custom domain: ${NC}")" proxysite
                 if [[ -z "$proxysite" ]]; then
-                    proxysite="p9-dy.byteimg.com"
+                    proxysite="p11.douyinpic.com"
                 fi
                 ;;
-            *) proxysite="p9-dy.byteimg.com" ;;
+            *) proxysite="p11.douyinpic.com" ;;
         esac
         echo -e "${GREEN}Using SNI: $proxysite${NC}"
 
@@ -1241,7 +1241,7 @@ change_shadowtls_sni() {
     echo -e "${CYAN}Current SNI: $current_sni${NC}"
     
     echo -e "\n${CYAN}Select new SNI:${NC}"
-    echo -e "1) p9-dy.byteimg.com (ByteDance CDN)"
+    echo -e "1) p11.douyinpic.com (Douyin Image CDN)"
     echo -e "2) mp.weixin.qq.com (WeChat)"
     echo -e "3) coding.net"
     echo -e "4) upyun.com (UpYun CDN)"
@@ -1249,7 +1249,7 @@ change_shadowtls_sni() {
     echo -e "6) sns-img-qc.xhscdn.com (XiaoHongShu Image)"
     echo -e "7) sns-video-qn.xhscdn.com (XiaoHongShu Video)"
     echo -e "8) p6-dy.byteimg.com (ByteDance CDN)"
-    echo -e "9) p11.douyinpic.com (Douyin Image CDN)"
+    echo -e "9) p9-dy.byteimg.com (ByteDance CDN)"
     echo -e "10) feishu.cn (Feishu/Lark)"
     echo -e "11) douyin.com"
     echo -e "12) toutiao.com"
@@ -1263,7 +1263,7 @@ change_shadowtls_sni() {
     read -p "Enter your choice (1-18): " sni_choice
     
     case $sni_choice in
-        1) new_sni="p9-dy.byteimg.com" ;;
+        1) new_sni="p11.douyinpic.com" ;;
         2) new_sni="mp.weixin.qq.com" ;;
         3) new_sni="coding.net" ;;
         4) new_sni="upyun.com" ;;
@@ -1271,7 +1271,7 @@ change_shadowtls_sni() {
         6) new_sni="sns-img-qc.xhscdn.com" ;;
         7) new_sni="sns-video-qn.xhscdn.com" ;;
         8) new_sni="p6-dy.byteimg.com" ;;
-        9) new_sni="p11.douyinpic.com" ;;
+        9) new_sni="p9-dy.byteimg.com" ;;
         10) new_sni="feishu.cn" ;;
         11) new_sni="douyin.com" ;;
         12) new_sni="toutiao.com" ;;
