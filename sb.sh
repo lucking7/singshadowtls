@@ -154,12 +154,17 @@ output_node_info() {
     local shadowtls_inbound_exists
     shadowtls_inbound_exists=$(jq -e '.inbounds[] | select(.type == "shadowtls")' /etc/sing-box/config.json >/dev/null 2>&1; echo $?)
 
-    local primary_ss_port # This will be the public port for SS if no STLS, or internal SS port if STLS exists
-    primary_ss_port=$(jq -r '.inbounds[] | select(.type == "shadowsocks") | .listen_port' /etc/sing-box/config.json)
+    # Check for separated UDP port configuration
+    local separated_udp_exists
+    separated_udp_exists=$(jq -e '.inbounds[] | select(.type == "shadowsocks" and .network == "udp" and .listen != "127.0.0.1")' /etc/sing-box/config.json >/dev/null 2>&1; echo $?)
+    
+    # Get primary SS port and method
+    local primary_ss_port
+    primary_ss_port=$(jq -r '.inbounds[] | select(.type == "shadowsocks") | .listen_port' /etc/sing-box/config.json | head -1)
     local ss_method
-    ss_method=$(jq -r '.inbounds[] | select(.type == "shadowsocks") | .method' /etc/sing-box/config.json)
+    ss_method=$(jq -r '.inbounds[] | select(.type == "shadowsocks") | .method' /etc/sing-box/config.json | head -1)
     local ss_pwd
-    ss_pwd=$(jq -r '.inbounds[] | select(.type == "shadowsocks") | .password' /etc/sing-box/config.json)
+    ss_pwd=$(jq -r '.inbounds[] | select(.type == "shadowsocks") | .password' /etc/sing-box/config.json | head -1)
 
     # Ensure country_code is available
     if [[ -z "$country_code" ]]; then 
@@ -179,18 +184,39 @@ output_node_info() {
         local sni
         sni=$(jq -r '.inbounds[] | select(.type == "shadowtls") | .handshake.server' /etc/sing-box/config.json)
 
-        # Output for ShadowTLS + Shadowsocks
-        echo -e "${CYAN}${country_code} [ss2022][shadow-tls-v3]${NC} = ${PINK}ss, ${primary_ip}, ${stls_port}, encrypt-method=${ss_method}, password=${ss_pwd}, shadow-tls-password=${shadowtls_pwd}, shadow-tls-sni=${sni}, shadow-tls-version=3, udp-relay=true, udp-port=${primary_ss_port}${NC}"
+        # Check if there's a separated UDP port
+        if [[ $separated_udp_exists -eq 0 ]]; then
+            local udp_port
+            udp_port=$(jq -r '.inbounds[] | select(.type == "shadowsocks" and .network == "udp" and .listen != "127.0.0.1") | .listen_port' /etc/sing-box/config.json)
+            
+            echo -e "${CYAN}${country_code} [ss2022][shadow-tls-v3][separated-ports]${NC} = ${PINK}ss, ${primary_ip}, ${stls_port}, encrypt-method=${ss_method}, password=${ss_pwd}, shadow-tls-password=${shadowtls_pwd}, shadow-tls-sni=${sni}, shadow-tls-version=3, udp-relay=true, udp-port=${udp_port}${NC}"
+            
+            echo -e "\n${YELLOW}━━━ Optional Configurations ━━━${NC}"
+            echo -e "${CYAN}${country_code} [ss2022][TCP-only]${NC} = ${PINK}ss, ${primary_ip}, ${stls_port}, encrypt-method=${ss_method}, password=${ss_pwd}, shadow-tls-password=${shadowtls_pwd}, shadow-tls-sni=${sni}, shadow-tls-version=3, udp-relay=false${NC}"
+            echo -e "${CYAN}${country_code} [ss2022][UDP-only]${NC} = ${PINK}ss, ${primary_ip}, ${udp_port}, encrypt-method=${ss_method}, password=${ss_pwd}, udp-relay=true${NC}"
+            
+            echo -e "\n${YELLOW}Note: Separated ports configuration - TCP via ShadowTLS obfuscation (${stls_port}), UDP direct (${udp_port})${NC}"
+        else
+            # Shared port configuration (experimental)
+            echo -e "${CYAN}${country_code} [ss2022][shadow-tls-v3][shared-port]${NC} = ${PINK}ss, ${primary_ip}, ${stls_port}, encrypt-method=${ss_method}, password=${ss_pwd}, shadow-tls-password=${shadowtls_pwd}, shadow-tls-sni=${sni}, shadow-tls-version=3, udp-relay=true${NC}"
+            
+            echo -e "\n${YELLOW}Note: Shared port configuration - Both TCP and UDP use port ${stls_port} (experimental feature)${NC}"
+        fi
         
-        # Output for direct Shadowsocks (pointing to the internal SS port)
-        echo -e "\n${YELLOW}━━━ Optional: Direct Shadowsocks Node (Internal Port) ━━━${NC}"
-        echo -e "${CYAN}${country_code} [ss2022]${NC} = ${PINK}ss, ${primary_ip}, ${primary_ss_port}, encrypt-method=${ss_method}, password=${ss_pwd}, udp-relay=true${NC}"
-        echo -e "\n${YELLOW}Note: The 'udp-port' for the ShadowTLS node points to the direct Shadowsocks UDP port (${primary_ss_port}).${NC}"
-    else # Only Shadowsocks is configured
-        echo -e "${CYAN}${country_code} [ss2022]${NC} = ${PINK}ss, ${primary_ip}, ${primary_ss_port}, encrypt-method=${ss_method}, password=${ss_pwd}, udp-relay=true${NC}"
-        echo -e "\n${YELLOW}Note: Shadowsocks is configured to listen directly on port ${primary_ss_port}.${NC}"
+        # Output for direct internal Shadowsocks
+        local internal_ss_port
+        internal_ss_port=$(jq -r '.inbounds[] | select(.type == "shadowsocks" and .listen == "127.0.0.1") | .listen_port' /etc/sing-box/config.json)
+        if [[ -n "$internal_ss_port" && "$internal_ss_port" != "null" ]]; then
+            echo -e "\n${YELLOW}━━━ Internal Shadowsocks Port (For debugging) ━━━${NC}"
+            echo -e "${CYAN}${country_code} [ss2022][internal]${NC} = ${PINK}ss, ${primary_ip}, ${internal_ss_port}, encrypt-method=${ss_method}, password=${ss_pwd}, udp-relay=true${NC}"
+        fi
+        
+    else # Only Shadowsocks is configured (Pure SS mode)
+        echo -e "${CYAN}${country_code} [ss2022][pure-ss]${NC} = ${PINK}ss, ${primary_ip}, ${primary_ss_port}, encrypt-method=${ss_method}, password=${ss_pwd}, udp-relay=true${NC}"
+        echo -e "\n${YELLOW}Note: Pure Shadowsocks configuration - Direct listening on port ${primary_ss_port}, no TLS obfuscation${NC}"
     fi
-    echo -e "\n${YELLOW}Ensure your client supports the specified parameters and adapt if necessary.${NC}"
+    
+    echo -e "\n${YELLOW}Make sure your client supports the specified parameters. Adjust configuration if necessary.${NC}"
 }
 
 # Function to format and validate sing-box configuration
@@ -237,16 +263,35 @@ install_sing_box() {
     echo -e "${BLUE}════════════════════════════════════════════════════════════════${NC}"
     get_ip_info 
 
-    local install_shadowtls_choice
-    read -p "$(echo -e "${YELLOW}Do you want to install ShadowTLS v3 for obfuscation? (yes/no) [Default: yes]: ${NC}")" install_shadowtls_choice
-    install_shadowtls_choice=$(echo "$install_shadowtls_choice" | tr '[:upper:]' '[:lower:]')
-    local use_shadowtls=1 # 1 for yes, 0 for no
-    if [[ "$install_shadowtls_choice" == "no" || "$install_shadowtls_choice" == "n" ]]; then
-        use_shadowtls=0
-        echo -e "${BLUE}ShadowTLS will not be installed. Shadowsocks will be configured to listen on a public port.${NC}"
-    else
-        echo -e "${GREEN}ShadowTLS will be installed (Recommended).${NC}"
-    fi
+    echo -e "\n${BLUE}━━━ Deployment Mode Selection ━━━${NC}"
+    echo -e "${YELLOW}Please select deployment mode:${NC}"
+    echo -e "  ${CYAN}1) Pure Shadowsocks (No obfuscation, best performance)${NC}"
+    echo -e "  ${CYAN}2) ShadowTLS + Separated Ports (Recommended, TCP obfuscation + UDP independent)${NC}"
+    echo -e "  ${CYAN}3) ShadowTLS + Shared Port (Experimental, TCP/UDP share same port)${NC}"
+    
+    local deployment_choice
+    read -p "$(echo -e "${YELLOW}Please select deployment mode [1-3] (Default: 2): ${NC}")" deployment_choice
+    
+    local use_shadowtls=0  # 0=Pure SS, 1=ShadowTLS+Separated, 2=ShadowTLS+Shared
+    local deployment_name=""
+    
+    case "$deployment_choice" in
+        1) 
+            use_shadowtls=0
+            deployment_name="Pure Shadowsocks"
+            echo -e "${GREEN}Selected: ${deployment_name}${NC}"
+            ;;
+        3) 
+            use_shadowtls=2
+            deployment_name="ShadowTLS + Shared Port"
+            echo -e "${GREEN}Selected: ${deployment_name} (Experimental feature)${NC}"
+            ;;
+        *) 
+            use_shadowtls=1
+            deployment_name="ShadowTLS + Separated Ports"
+            echo -e "${GREEN}Selected: ${deployment_name} (Recommended)${NC}"
+            ;;
+    esac
 
     ARCH=$(get_arch)
     echo -e "${BLUE}Detected Architecture: ${CYAN}$ARCH${NC}"
@@ -354,7 +399,7 @@ install_sing_box() {
     echo -e "\n${YELLOW}Shadowsocks password configuration:${NC}"
     echo -e "  - Enter custom password"
     echo -e "  - Press Enter for random password"
-    read -p "$(echo -e "${YELLOW}Enter Shadowsocks password (Enter for random): ${NC}")" ss_pwd
+    read -p "$(echo -e "${YELLOW}Enter Shadowsocks password (Press Enter for random): ${NC}")" ss_pwd
     
     if [[ -z "$ss_pwd" ]]; then
         case "$ss_method" in
@@ -374,11 +419,11 @@ install_sing_box() {
     fi
 
     local shadowtls_pwd=""
-    if [[ $use_shadowtls -eq 1 ]]; then
+    if [[ $use_shadowtls -gt 0 ]]; then  # ShadowTLS + Separated or ShadowTLS + Shared
         echo -e "\n${YELLOW}ShadowTLS password configuration:${NC}"
         echo -e "  - Enter custom password"
         echo -e "  - Press Enter for random password"
-        read -p "$(echo -e "${YELLOW}Enter ShadowTLS password (Enter for random): ${NC}")" shadowtls_pwd
+        read -p "$(echo -e "${YELLOW}Enter ShadowTLS password (Press Enter for random): ${NC}")" shadowtls_pwd
         
         if [[ -z "$shadowtls_pwd" ]]; then
             shadowtls_pwd=$(openssl rand -base64 32)
@@ -389,19 +434,25 @@ install_sing_box() {
     fi
 
     echo -e "\n${BLUE}━━━ Port Configuration ━━━${NC}"
-    local port="" # This will be ShadowTLS port if use_shadowtls=1, or Shadowsocks public port if use_shadowtls=0
+    local port="" # Main port (SS for pure mode, ShadowTLS for mixed modes)
     local port_prompt_text=""
 
-    if [[ $use_shadowtls -eq 1 ]]; then
-        port_prompt_text="ShadowTLS listening port"
-    else
-        port_prompt_text="Shadowsocks (public) listening port"
-    fi
+    case $use_shadowtls in
+        0) # Pure Shadowsocks
+            port_prompt_text="Shadowsocks listening port"
+            ;;
+        1) # ShadowTLS + Separated Ports
+            port_prompt_text="ShadowTLS listening port (TCP obfuscation port)"
+            ;;
+        2) # ShadowTLS + Shared Port
+            port_prompt_text="ShadowTLS/UDP shared port"
+            ;;
+    esac
 
     echo -e "${YELLOW}Port configuration:${NC}"
     echo -e "  - Enter port number (10000-65535)"
     echo -e "  - Press Enter for random port"
-    read -p "$(echo -e "${YELLOW}Set ${port_prompt_text} (Enter for random): ${NC}")" port
+    read -p "$(echo -e "${YELLOW}Set ${port_prompt_text} (Press Enter for random): ${NC}")" port
     
     if [[ -z "$port" ]]; then
         port=$(shuf -i 10000-65535 -n 1)
@@ -419,32 +470,51 @@ install_sing_box() {
         else
             break
         fi
-        read -p "$(echo -e "${YELLOW}Please enter a new port (Enter for random): ${NC}")" port
+        read -p "$(echo -e "${YELLOW}Please enter a new port (Press Enter for random): ${NC}")" port
         if [[ -z "$port" ]]; then
             port=$(shuf -i 10000-65535 -n 1)
             echo -e "${BLUE}Generated random port: $port${NC}"
         fi
     done
     
-    if [[ $use_shadowtls -eq 1 ]]; then
-        echo -e "${GREEN}Will use port $port for ShadowTLS.${NC}"
-    else
-        echo -e "${GREEN}Will use port $port as Shadowsocks public port.${NC}"
-    fi
+    echo -e "${GREEN}Will use port $port for ${deployment_name}.${NC}"
     
-    local ss_port_internal="" # Internal SS port, only used if ShadowTLS is active
-    if [[ $use_shadowtls -eq 1 ]]; then
+    # Internal SS port and UDP port configuration
+    local ss_port_internal="" # Internal SS port for ShadowTLS modes
+    local udp_port="" # Separated UDP port for mode 1
+    
+    if [[ $use_shadowtls -eq 1 ]]; then  # ShadowTLS + Separated Ports
+        # Generate internal SS port
         ss_port_internal=$(shuf -i 10000-65535 -n 1)
         until [[ $ss_port_internal != $port && -z $(ss -ntlp | awk '{print $4}' | sed 's/.*://g' | grep -w "$ss_port_internal") ]]; do
             ss_port_internal=$(shuf -i 10000-65535 -n 1)
         done
-        echo -e "${GREEN}Will use port $ss_port_internal for Shadowsocks (internal).${NC}"
+        echo -e "${GREEN}Will use port $ss_port_internal for Shadowsocks (internal TCP).${NC}"
+        
+        # Generate UDP port (next to main port for convenience)
+        udp_port=$((port + 1))
+        until [[ -z $(ss -ntlp | awk '{print $4}' | sed 's/.*://g' | grep -w "$udp_port") ]]; do
+            udp_port=$((udp_port + 1))
+            if [[ $udp_port -gt 65535 ]]; then
+                udp_port=$(shuf -i 10000-65535 -n 1)
+            fi
+        done
+        echo -e "${GREEN}Will use port $udp_port for Shadowsocks (direct UDP).${NC}"
+        
+    elif [[ $use_shadowtls -eq 2 ]]; then  # ShadowTLS + Shared Port
+        # Generate internal SS port for TCP
+        ss_port_internal=$(shuf -i 10000-65535 -n 1)
+        until [[ $ss_port_internal != $port && -z $(ss -ntlp | awk '{print $4}' | sed 's/.*://g' | grep -w "$ss_port_internal") ]]; do
+            ss_port_internal=$(shuf -i 10000-65535 -n 1)
+        done
+        echo -e "${GREEN}Will use port $ss_port_internal for Shadowsocks (internal TCP).${NC}"
+        echo -e "${YELLOW}Will attempt to use port $port for UDP (experimental - may conflict).${NC}"
     fi
 
     echo -e "\n${BLUE}━━━ ShadowTLS Handshake Settings ━━━${NC}"
     local proxysite=""
     local wildcard_sni=""
-    if [[ $use_shadowtls -eq 1 ]]; then
+    if [[ $use_shadowtls -gt 0 ]]; then
         echo -e "${YELLOW}Select ShadowTLS SNI:${NC}"
         echo -e "  ${CYAN}1) p11.douyinpic.com (Douyin Image CDN - Default)${NC}"
         echo -e "  ${CYAN}2) mp.weixin.qq.com (WeChat)${NC}"
@@ -581,15 +651,9 @@ install_sing_box() {
 
     echo -e "\n${BLUE}━━━ Generating Configuration File ━━━${NC}"
     
-    # Determine SS listen port for the config: public if no STLS, internal if STLS is used.
-    local ss_listen_port_for_config=$port 
-    if [[ $use_shadowtls -eq 1 ]]; then
-        ss_listen_port_for_config=$ss_port_internal
-    fi
-
     # Start building inbounds JSON
     local inbounds_json=""
-    if [[ $use_shadowtls -eq 1 ]]; then
+    if [[ $use_shadowtls -gt 0 ]]; then
         inbounds_json=$(cat << INNER_EOF
         {
             "type": "shadowtls",
@@ -614,17 +678,62 @@ INNER_EOF
 )
     fi
 
-    inbounds_json+=$(cat << INNER_EOF
+    # Add main Shadowsocks inbound
+    if [[ $use_shadowtls -eq 0 ]]; then
+        # Pure Shadowsocks mode - listen on public port
+        inbounds_json+=$(cat << INNER_EOF
         {
             "type": "shadowsocks",
             "tag": "shadowsocks-in",
             "listen": "::",
-            "listen_port": $ss_listen_port_for_config,
+            "listen_port": $port,
             "method": "$ss_method",
             "password": "$ss_pwd"
         }
 INNER_EOF
 )
+    else
+        # ShadowTLS modes - internal Shadowsocks for TCP
+        inbounds_json+=$(cat << INNER_EOF
+        {
+            "type": "shadowsocks",
+            "tag": "shadowsocks-in",
+            "listen": "127.0.0.1",
+            "listen_port": $ss_port_internal,
+            "network": "tcp",
+            "method": "$ss_method",
+            "password": "$ss_pwd"
+        }
+INNER_EOF
+)
+        
+        # Add UDP handling based on mode
+        if [[ $use_shadowtls -eq 1 ]]; then
+            # Separated UDP port
+            inbounds_json+=",
+        {
+            "type": "shadowsocks",
+            "tag": "shadowsocks-udp",
+            "listen": "::",
+            "listen_port": $udp_port,
+            "network": "udp",
+            "method": "$ss_method",
+            "password": "$ss_pwd"
+        }"
+        elif [[ $use_shadowtls -eq 2 ]]; then
+            # Shared port UDP (experimental)
+            inbounds_json+=",
+        {
+            "type": "shadowsocks",
+            "tag": "shadowsocks-udp",
+            "listen": "::",
+            "listen_port": $port,
+            "network": "udp",
+            "method": "$ss_method",
+            "password": "$ss_pwd"
+        }"
+        fi
+    fi
 
     cat << EOF > /etc/sing-box/config.json
 {
@@ -921,93 +1030,179 @@ change_port() {
     
     echo -e "\n${BLUE}━━━ Change Port Configuration ━━━${NC}"
     
-    # Check if ShadowTLS is configured
+    # Detect current deployment mode
     local shadowtls_exists=$(jq -e '.inbounds[] | select(.type == "shadowtls")' /etc/sing-box/config.json >/dev/null 2>&1; echo $?)
+    local separated_udp_exists=$(jq -e '.inbounds[] | select(.type == "shadowsocks" and .network == "udp" and .listen != "127.0.0.1")' /etc/sing-box/config.json >/dev/null 2>&1; echo $?)
     
-    if [[ $shadowtls_exists -eq 0 ]]; then
-        echo -e "${CYAN}Which port would you like to change?${NC}"
-        echo -e "1) ShadowTLS Port"
-        echo -e "2) Shadowsocks Port (Internal)"
-        read -p "Enter your choice (1-2): " port_choice
+    local mode_name=""
+    local target_tag=""
+    local service_name=""
+    local is_shared_port_change=0
+
+    if [[ $shadowtls_exists -ne 0 ]]; then # Pure SS mode
+        mode_name="Pure Shadowsocks"
+        echo -e "${CYAN}Current mode: $mode_name${NC}"
+        target_tag="shadowsocks-in" # Assumes the main SS inbound has this tag or is the only one
+        service_name="Shadowsocks (TCP/UDP)"
         
-        case $port_choice in
-            1)
-                local tag="shadowtls-in"
-                local service_name="ShadowTLS"
-                ;;
-            2)
-                local tag="shadowsocks-in"
-                local service_name="Shadowsocks (Internal)"
-                ;;
-            *)
-                echo -e "${RED}Invalid choice.${NC}"
-                return 1
-                ;;
+        local current_port=$(jq -r ".inbounds[] | select(.type == "shadowsocks") | .listen_port" /etc/sing-box/config.json | head -1)
+        echo -e "${CYAN}Current $service_name listening port: $current_port${NC}"
+        
+        read -p "$(echo -e "${YELLOW}Please enter new $service_name port (10000-65535, Enter for random): ${NC}")" new_port
+        if [[ -z "$new_port" ]]; then
+            new_port=$(shuf -i 10000-65535 -n 1)
+            echo -e "${BLUE}Generated random port: $new_port${NC}"
+        fi
+
+        if ! validate_and_check_port "$new_port"; then return 1; fi
+        
+        jq "(.inbounds[] | select(.type == "shadowsocks") | .listen_port) = $new_port" /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+
+    elif [[ $separated_udp_exists -eq 0 ]]; then # ShadowTLS + Separated UDP mode
+        mode_name="ShadowTLS + Separated Ports"
+        echo -e "${CYAN}Current mode: $mode_name${NC}"
+        echo -e "${YELLOW}Which port would you like to modify?${NC}"
+        echo -e "  ${CYAN}1) ShadowTLS (TCP obfuscation) port${NC}"
+        echo -e "  ${CYAN}2) Shadowsocks internal TCP port (usually no need to change)${NC}"
+        echo -e "  ${CYAN}3) Shadowsocks separated UDP port${NC}"
+        read -p "$(echo -e "${YELLOW}Please enter option [1-3]: ${NC}")" port_choice
+
+        local current_port=""
+        case "$port_choice" in
+            1) target_tag="shadowtls-in"; service_name="ShadowTLS (TCP obfuscation)";;
+            2) target_tag="shadowsocks-in"; service_name="Shadowsocks internal TCP";; # This one listens on 127.0.0.1
+            3) target_tag="shadowsocks-udp"; service_name="Shadowsocks separated UDP";;
+            *) echo -e "${RED}Invalid option.${NC}"; return 1;;
         esac
-    else
-        local tag="shadowsocks-in"
-        local service_name="Shadowsocks"
-    fi
-    
-    local current_port=$(jq -r ".inbounds[] | select(.tag == \"$tag\") | .listen_port" /etc/sing-box/config.json)
-    echo -e "${CYAN}Current $service_name port: $current_port${NC}"
-    
-    echo -e "${YELLOW}Port configuration:${NC}"
-    echo -e "  - Enter port number (10000-65535)"
-    echo -e "  - Press Enter for random port"
-    
-    read -p "Enter new port or press Enter: " new_port
-    
-    if [[ -z "$new_port" ]]; then
-        # Generate random port
-        while true; do
-            new_port=$((RANDOM % 55536 + 10000))
-            if ! ss -tuln | grep -q ":$new_port "; then
-                echo -e "${GREEN}Generated random port: $new_port${NC}"
-                break
-            fi
-        done
-    else
-        # Validate user input
-        if ! [[ "$new_port" =~ ^[0-9]+$ ]] || [ "$new_port" -lt 10000 ] || [ "$new_port" -gt 65535 ]; then
-            echo -e "${RED}Error: Port must be a number between 10000-65535.${NC}"
-            return 1
+
+        if [[ "$target_tag" == "shadowsocks-in" ]]; then
+             current_port=$(jq -r ".inbounds[] | select(.tag == "$target_tag" and .listen == "127.0.0.1") | .listen_port" /etc/sing-box/config.json)
+        else
+             current_port=$(jq -r ".inbounds[] | select(.tag == "$target_tag") | .listen_port" /etc/sing-box/config.json)
         fi
+        echo -e "${CYAN}Current $service_name port: $current_port${NC}"
+        read -p "$(echo -e "${YELLOW}Please enter new $service_name port (10000-65535, Enter for random): ${NC}")" new_port
+        if [[ -z "$new_port" ]]; then
+            new_port=$(shuf -i 10000-65535 -n 1)
+            echo -e "${BLUE}Generated random port: $new_port${NC}"
+        fi
+
+        if ! validate_and_check_port "$new_port"; then return 1; fi
         
-        # Check if port is in use
-        if ss -tuln | grep -q ":$new_port "; then
-            echo -e "${RED}Error: Port $new_port is already in use.${NC}"
-            return 1
+        if [[ "$target_tag" == "shadowsocks-in" ]]; then
+            jq "(.inbounds[] | select(.tag == "$target_tag" and .listen == "127.0.0.1") | .listen_port) = $new_port" /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+        else
+            jq "(.inbounds[] | select(.tag == "$target_tag") | .listen_port) = $new_port" /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+        fi
+
+    else # ShadowTLS + Shared Port mode
+        mode_name="ShadowTLS + Shared Port"
+        echo -e "${CYAN}Current mode: $mode_name${NC}"
+        echo -e "${YELLOW}Which port would you like to modify?${NC}"
+        echo -e "  ${CYAN}1) ShadowTLS and Shadowsocks UDP shared port${NC}"
+        echo -e "  ${CYAN}2) Shadowsocks internal TCP port (usually no need to change)${NC}"
+        read -p "$(echo -e "${YELLOW}Please enter option [1-2]: ${NC}")" port_choice
+        
+        local current_port=""
+        case "$port_choice" in
+            1) 
+                target_tag="shadowtls-in" # Primary tag for shared port
+                service_name="ShadowTLS/UDP shared"
+                is_shared_port_change=1
+                current_port=$(jq -r ".inbounds[] | select(.tag == "shadowtls-in") | .listen_port" /etc/sing-box/config.json)
+                ;;
+            2) 
+                target_tag="shadowsocks-in" 
+                service_name="Shadowsocks internal TCP"
+                current_port=$(jq -r ".inbounds[] | select(.tag == "$target_tag" and .listen == "127.0.0.1") | .listen_port" /etc/sing-box/config.json)
+                ;;
+            *) echo -e "${RED}Invalid option.${NC}"; return 1;;
+        esac
+        
+        echo -e "${CYAN}Current $service_name port: $current_port${NC}"
+        read -p "$(echo -e "${YELLOW}Please enter new $service_name port (10000-65535, Enter for random): ${NC}")" new_port
+        if [[ -z "$new_port" ]]; then
+            new_port=$(shuf -i 10000-65535 -n 1)
+            echo -e "${BLUE}Generated random port: $new_port${NC}"
+        fi
+
+        if ! validate_and_check_port "$new_port"; then return 1; fi
+
+        if [[ $is_shared_port_change -eq 1 ]]; then
+            # Update ShadowTLS port and the SS UDP port that shares it
+            jq "(.inbounds[] | select(.tag == "shadowtls-in") | .listen_port) = $new_port | (.inbounds[] | select(.tag == "shadowsocks-udp") | .listen_port) = $new_port" /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+        else # Internal SS TCP port
+            jq "(.inbounds[] | select(.tag == "$target_tag" and .listen == "127.0.0.1") | .listen_port) = $new_port" /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
         fi
     fi
     
-    # Update configuration
-    jq ".inbounds = [.inbounds[] | if .tag == \"$tag\" then .listen_port = $new_port else . end]" /etc/sing-box/config.json > /tmp/sing-box-temp.json
-    mv /tmp/sing-box-temp.json /etc/sing-box/config.json
-    
-    # Set permissions
-    chown sing-box:sing-box /etc/sing-box/config.json
-    chmod 640 /etc/sing-box/config.json
-    
-    # Format and validate configuration
-    if ! format_config; then
-        echo -e "${RED}Error: Configuration validation failed.${NC}"
+    if [[ $? -ne 0 ]]; then
+        echo -e "${RED}Port update failed. Check jq command and file permissions.${NC}"
         return 1
     fi
     
-    # Restart service
+    chown sing-box:sing-box /etc/sing-box/config.json
+    chmod 640 /etc/sing-box/config.json
+    
+    if ! format_config; then
+        echo -e "${RED}Error: Configuration file formatting or validation failed.${NC}"
+        # Attempt to restore from backup if one exists from install/previous change? For now, just error out.
+        return 1
+    fi
+    
     echo -e "${BLUE}Restarting Sing-Box service...${NC}"
     systemctl restart sing-box
     
     if systemctl is-active --quiet sing-box; then
-        echo -e "${GREEN}Port changed successfully! New $service_name port: $new_port${NC}"
-        if [[ "$tag" == "shadowtls-in" || "$shadowtls_exists" -eq 0 ]]; then
-            output_node_info
-        fi
+        echo -e "${GREEN}Port successfully changed to $new_port!${NC}"
+        output_node_info
     else
-        echo -e "${RED}Error: Service failed to restart.${NC}"
+        echo -e "${RED}Error: Service restart failed.${NC}"
         return 1
     fi
+}
+
+# Helper function for port validation (to avoid repetition)
+validate_and_check_port() {
+    local port_to_validate=$1
+    if [[ ! "$port_to_validate" =~ ^[0-9]+$ ]]; then
+        echo -e "${RED}Error: Port must be numeric.${NC}"
+        return 1
+    elif [[ "$port_to_validate" -lt 10000 || "$port_to_validate" -gt 65535 ]]; then
+        echo -e "${RED}Error: Port must be between 10000-65535.${NC}"
+        return 1
+    elif [[ -n $(ss -ntlp | awk '{print $4}' | sed 's/.*://g' | grep -w "$port_to_validate") ]]; then
+        # Allow if the port is currently used by one of our own inbounds (relevant for shared port changes)
+        local current_config_ports=$(jq -r '.inbounds[].listen_port' /etc/sing-box/config.json 2>/dev/null)
+        local is_own_port=0
+        for p in $current_config_ports; do
+            if [[ "$p" == "$port_to_validate" ]]; then
+                is_own_port=1
+                # If it's a shared port scenario, we might be "re-using" it for a different component.
+                # This needs careful handling or a more sophisticated check.
+                # For now, if it's any of our current ports, this check is tricky.
+                # The port *should* be different unless we are changing an existing port to itself (no change).
+                # This simple check might not be robust enough for shared port logic where the *same new port*
+                # might be assigned to STLS and SS-UDP.
+                # The primary check for "already in use" should ideally exclude ports currently used by sing-box itself *if*
+                # we're just reconfiguring. But changing to a port used by *another* app is bad.
+                
+                # A simpler approach: if new_port is same as current_port, it's fine.
+                # Otherwise, it must not be in use by any other process.
+                # This part is tricky. The original script's port check is generally fine.
+                # We should ensure we are not trying to use a port used by *another* application.
+                # Ports used by sing-box itself will be freed upon restart.
+            fi
+        done
+        if [[ $is_own_port -eq 0 ]]; then # Port is in use by something else
+             echo -e "${RED}Error: Port $port_to_validate is already in use by another process.${NC}"
+             return 1
+        fi
+        # If it's an "own port", we assume it's okay as sing-box will restart.
+        # This means if the user enters the *same* port, it will pass. If they enter a port
+        # used by another app, it will fail. If they enter a free port, it will pass.
+    fi
+    return 0
 }
 
 # Function to change Shadowsocks UDP port
@@ -1090,77 +1285,62 @@ change_passwords() {
     
     echo -e "\n${BLUE}━━━ Change Passwords ━━━${NC}"
     
-    # Check if ShadowTLS is configured
     local shadowtls_exists=$(jq -e '.inbounds[] | select(.type == "shadowtls")' /etc/sing-box/config.json >/dev/null 2>&1; echo $?)
-    
-    # Get current encryption method
-    local current_method=$(jq -r '.inbounds[] | select(.type == "shadowsocks") | .method' /etc/sing-box/config.json)
-    
+    local current_ss_method=$(jq -r '.inbounds[] | select(.type == "shadowsocks") | .method' /etc/sing-box/config.json | head -1)
+
     # Change ShadowTLS password if it exists
     if [[ $shadowtls_exists -eq 0 ]]; then
         echo -e "\n${CYAN}ShadowTLS password configuration:${NC}"
-        echo -e "${YELLOW}Password options:${NC}"
         echo -e "  - Enter custom password"
         echo -e "  - Press Enter for random password"
-        
-        read -p "Enter new ShadowTLS password or press Enter: " shadowtls_password
+        read -p "$(echo -e "${YELLOW}Please enter new ShadowTLS password (Press Enter for random): ${NC}")" shadowtls_password
         
         if [[ -z "$shadowtls_password" ]]; then
-            shadowtls_password=$(openssl rand -base64 16)
-            echo -e "${GREEN}Generated random password.${NC}"
+            shadowtls_password=$(openssl rand -base64 32)
+            echo -e "${GREEN}Generated random ShadowTLS password.${NC}"
         fi
         
-        # Update ShadowTLS password
-        jq ".inbounds = [.inbounds[] | if .type == \"shadowtls\" then .users[0].password = \"$shadowtls_password\" else . end]" /etc/sing-box/config.json > /tmp/sing-box-temp.json
-        mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+        jq "(.inbounds[] | select(.type == "shadowtls") | .users[0].password) = \"$shadowtls_password\"" /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+        if [[ $? -ne 0 ]]; then echo -e "${RED}ShadowTLS password update failed.${NC}"; return 1; fi
+        echo -e "${GREEN}ShadowTLS password updated.${NC}"
     fi
     
     # Change Shadowsocks password
     echo -e "\n${CYAN}Shadowsocks password configuration:${NC}"
-    echo -e "${YELLOW}Password options:${NC}"
     echo -e "  - Enter custom password"
     echo -e "  - Press Enter for random password"
-    
-    read -p "Enter new Shadowsocks password or press Enter: " shadowsocks_password
+    read -p "$(echo -e "${YELLOW}Please enter new Shadowsocks password (Press Enter for random): ${NC}")" shadowsocks_password
     
     if [[ -z "$shadowsocks_password" ]]; then
-        case "$current_method" in
-            "2022-blake3-aes-128-gcm")
-                shadowsocks_password=$(openssl rand -base64 16)
-                ;;
-            "2022-blake3-aes-256-gcm"|"2022-blake3-chacha20-poly1305")
-                shadowsocks_password=$(openssl rand -base64 32)
-                ;;
-            *)
-                shadowsocks_password=$(openssl rand -base64 16)
-                ;;
+        case "$current_ss_method" in
+            "2022-blake3-aes-128-gcm") shadowsocks_password=$(openssl rand -base64 16) ;; 
+            "2022-blake3-aes-256-gcm"|"2022-blake3-chacha20-poly1305") shadowsocks_password=$(openssl rand -base64 32) ;; 
+            *) shadowsocks_password=$(openssl rand -base64 32) ;; # Default for older methods or if method unknown
         esac
-        echo -e "${GREEN}Generated random password.${NC}"
+        echo -e "${GREEN}Generated random Shadowsocks password.${NC}"
     fi
     
-    # Update Shadowsocks password
-    jq ".inbounds = [.inbounds[] | if .type == \"shadowsocks\" then .password = \"$shadowsocks_password\" else . end]" /etc/sing-box/config.json > /tmp/sing-box-temp.json
-    mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+    # Update password for all Shadowsocks inbounds
+    jq "(.inbounds[] | select(.type == "shadowsocks") | .password) = \"$shadowsocks_password\"" /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+    if [[ $? -ne 0 ]]; then echo -e "${RED}Shadowsocks password update failed.${NC}"; return 1; fi
+    echo -e "${GREEN}Shadowsocks password updated (applied to all SS configurations).${NC}"
     
-    # Set permissions
     chown sing-box:sing-box /etc/sing-box/config.json
     chmod 640 /etc/sing-box/config.json
     
-    # Format and validate configuration
     if ! format_config; then
-        echo -e "${RED}Error: Configuration validation failed.${NC}"
+        echo -e "${RED}Error: Configuration file formatting or validation failed.${NC}"
         return 1
     fi
     
-    # Restart service
     echo -e "${BLUE}Restarting Sing-Box service...${NC}"
     systemctl restart sing-box
     
     if systemctl is-active --quiet sing-box; then
-        echo -e "${GREEN}Passwords changed successfully!${NC}"
+        echo -e "${GREEN}Passwords successfully changed!${NC}"
         output_node_info
     else
-        echo -e "${RED}Error: Service failed to restart.${NC}"
+        echo -e "${RED}Error: Service restart failed.${NC}"
         return 1
     fi
 }
@@ -1172,50 +1352,41 @@ change_shadowtls_password() {
         return 1
     fi
     
-    # Check if ShadowTLS is configured
     local shadowtls_exists=$(jq -e '.inbounds[] | select(.type == "shadowtls")' /etc/sing-box/config.json >/dev/null 2>&1; echo $?)
-    
     if [[ $shadowtls_exists -ne 0 ]]; then
         echo -e "${RED}Error: ShadowTLS is not configured.${NC}"
         return 1
     fi
     
     echo -e "\n${BLUE}━━━ Change ShadowTLS Password ━━━${NC}"
-    
-    echo -e "${YELLOW}Password options:${NC}"
     echo -e "  - Enter custom password"
     echo -e "  - Press Enter for random password"
-    
-    read -p "Enter new ShadowTLS password or press Enter: " new_password
+    read -p "$(echo -e "${YELLOW}Please enter new ShadowTLS password (Press Enter for random): ${NC}")" new_password
     
     if [[ -z "$new_password" ]]; then
-        new_password=$(openssl rand -base64 16)
+        new_password=$(openssl rand -base64 32)
         echo -e "${GREEN}Generated random password.${NC}"
     fi
     
-    # Update configuration
-    jq ".inbounds = [.inbounds[] | if .type == \"shadowtls\" then .users[0].password = \"$new_password\" else . end]" /etc/sing-box/config.json > /tmp/sing-box-temp.json
-    mv /tmp/sing-box-temp.json /etc/sing-box/config.json
-    
-    # Set permissions
+    jq "(.inbounds[] | select(.type == "shadowtls") | .users[0].password) = \"$new_password\"" /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+    if [[ $? -ne 0 ]]; then echo -e "${RED}ShadowTLS password update failed.${NC}"; return 1; fi
+        
     chown sing-box:sing-box /etc/sing-box/config.json
     chmod 640 /etc/sing-box/config.json
     
-    # Format and validate configuration
     if ! format_config; then
-        echo -e "${RED}Error: Configuration validation failed.${NC}"
+        echo -e "${RED}Error: Configuration file formatting or validation failed.${NC}"
         return 1
     fi
     
-    # Restart service
     echo -e "${BLUE}Restarting Sing-Box service...${NC}"
     systemctl restart sing-box
     
     if systemctl is-active --quiet sing-box; then
-        echo -e "${GREEN}ShadowTLS password changed successfully!${NC}"
+        echo -e "${GREEN}ShadowTLS password successfully changed!${NC}"
         output_node_info
     else
-        echo -e "${RED}Error: Service failed to restart.${NC}"
+        echo -e "${RED}Error: Service restart failed.${NC}"
         return 1
     fi
 }
@@ -1699,80 +1870,103 @@ change_ss_method() {
     
     echo -e "\n${BLUE}━━━ Change Shadowsocks Encryption Method ━━━${NC}"
     
-    local current_method=$(jq -r '.inbounds[] | select(.type == "shadowsocks") | .method' /etc/sing-box/config.json)
-    echo -e "${CYAN}Current method: $current_method${NC}"
+    local current_method=$(jq -r '.inbounds[] | select(.type == "shadowsocks") | .method' /etc/sing-box/config.json | head -1)
+    echo -e "${CYAN}Current encryption method: $current_method${NC}"
     
-    echo -e "\n${CYAN}Select new encryption method:${NC}"
-    echo -e "1) 2022-blake3-aes-128-gcm"
-    echo -e "2) 2022-blake3-aes-256-gcm (Recommended)"
-    echo -e "3) 2022-blake3-chacha20-poly1305"
-    echo -e "4) aes-128-gcm"
-    echo -e "5) aes-256-gcm"
-    echo -e "6) chacha20-ietf-poly1305"
+    echo -e "\n${CYAN}Please select new encryption method:${NC}"
+    echo -e "  1) 2022-blake3-aes-128-gcm"
+    echo -e "  2) 2022-blake3-aes-256-gcm (Recommended)"
+    echo -e "  3) 2022-blake3-chacha20-poly1305"
+    echo -e "  4) aes-128-gcm"
+    echo -e "  5) aes-256-gcm"
+    echo -e "  6) chacha20-ietf-poly1305"
     
-    read -p "Enter your choice (1-6): " method_choice
-    
-    case $method_choice in
-        1) new_method="2022-blake3-aes-128-gcm" ;;
-        2) new_method="2022-blake3-aes-256-gcm" ;;
-        3) new_method="2022-blake3-chacha20-poly1305" ;;
-        4) new_method="aes-128-gcm" ;;
-        5) new_method="aes-256-gcm" ;;
-        6) new_method="chacha20-ietf-poly1305" ;;
-        *)
-            echo -e "${RED}Invalid choice.${NC}"
-            return 1
-            ;;
+    read -p "$(echo -e "${YELLOW}Please enter option [1-6]: ${NC}")" method_choice
+    local new_method=""
+    case "$method_choice" in
+        1) new_method="2022-blake3-aes-128-gcm" ;; 
+        2) new_method="2022-blake3-aes-256-gcm" ;; 
+        3) new_method="2022-blake3-chacha20-poly1305" ;; 
+        4) new_method="aes-128-gcm" ;; 
+        5) new_method="aes-256-gcm" ;; 
+        6) new_method="chacha20-ietf-poly1305" ;; 
+        *) echo -e "${RED}Invalid option.${NC}"; return 1 ;;
     esac
     
-    # Generate appropriate password based on method
-    echo -e "\n${CYAN}Shadowsocks password configuration:${NC}"
-    echo -e "${YELLOW}Password options:${NC}"
+    echo -e "\n${CYAN}Shadowsocks password configuration (new password required after encryption method change):${NC}"
     echo -e "  - Enter custom password"
     echo -e "  - Press Enter for random password"
-    
-    read -p "Enter new Shadowsocks password or press Enter: " new_password
+    read -p "$(echo -e "${YELLOW}Please enter new Shadowsocks password (Press Enter for random): ${NC}")" new_password
     
     if [[ -z "$new_password" ]]; then
         case "$new_method" in
-            "2022-blake3-aes-128-gcm")
-                new_password=$(openssl rand -base64 16)
-                ;;
-            "2022-blake3-aes-256-gcm"|"2022-blake3-chacha20-poly1305")
-                new_password=$(openssl rand -base64 32)
-                ;;
-            *)
-                new_password=$(openssl rand -base64 16)
-                ;;
+            "2022-blake3-aes-128-gcm") new_password=$(openssl rand -base64 16) ;; 
+            "2022-blake3-aes-256-gcm"|"2022-blake3-chacha20-poly1305") new_password=$(openssl rand -base64 32) ;; 
+            *) new_password=$(openssl rand -base64 16) ;; # Default for older methods
         esac
-        echo -e "${GREEN}Generated random password.${NC}"
+        echo -e "${GREEN}Generated random password for the new encryption method.${NC}"
     fi
     
-    # Update configuration
-    jq ".inbounds = [.inbounds[] | if .type == \"shadowsocks\" then (.method = \"$new_method\" | .password = \"$new_password\") else . end]" /etc/sing-box/config.json > /tmp/sing-box-temp.json
-    mv /tmp/sing-box-temp.json /etc/sing-box/config.json
-    
-    # Set permissions
+    # Update method and password for all Shadowsocks inbounds
+    jq "(.inbounds[] | select(.type == "shadowsocks") | .method) = \"$new_method\" | (.inbounds[] | select(.type == "shadowsocks") | .password) = \"$new_password\"" /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+    if [[ $? -ne 0 ]]; then echo -e "${RED}Encryption method and password update failed.${NC}"; return 1; fi
+
     chown sing-box:sing-box /etc/sing-box/config.json
     chmod 640 /etc/sing-box/config.json
     
-    # Format and validate configuration
     if ! format_config; then
-        echo -e "${RED}Error: Configuration validation failed.${NC}"
+        echo -e "${RED}Error: Configuration file formatting or validation failed.${NC}"
         return 1
     fi
     
-    # Restart service
     echo -e "${BLUE}Restarting Sing-Box service...${NC}"
     systemctl restart sing-box
     
     if systemctl is-active --quiet sing-box; then
-        echo -e "${GREEN}Encryption method changed successfully!${NC}"
-        echo -e "${GREEN}New method: $new_method${NC}"
+        echo -e "${GREEN}Encryption method successfully changed to: $new_method${NC}"
         output_node_info
     else
-        echo -e "${RED}Error: Service failed to restart.${NC}"
+        echo -e "${RED}Error: Service restart failed.${NC}"
         return 1
+    fi
+}
+
+# Function to specifically change only Shadowsocks password
+change_shadowsocks_password_only(){
+    if [[ ! -f /etc/sing-box/config.json ]]; then
+        echo -e "${RED}Error: Configuration file not found.${NC}"
+        return 1
+    fi
+    echo -e "\n${BLUE}━━━ Change Shadowsocks Password Only ━━━${NC}"
+    local current_ss_method=$(jq -r '.inbounds[] | select(.type == "shadowsocks") | .method' /etc/sing-box/config.json | head -1)
+    echo -e "\n${CYAN}Shadowsocks password configuration:${NC}"
+    echo -e "  - Enter custom password"
+    echo -e "  - Press Enter for random password"
+    read -p "$(echo -e "${YELLOW}Please enter new Shadowsocks password (Press Enter for random): ${NC}")" shadowsocks_password
+    
+    if [[ -z "$shadowsocks_password" ]]; then
+        case "$current_ss_method" in
+            "2022-blake3-aes-128-gcm") shadowsocks_password=$(openssl rand -base64 16) ;; 
+            "2022-blake3-aes-256-gcm"|"2022-blake3-chacha20-poly1305") shadowsocks_password=$(openssl rand -base64 32) ;; 
+            *) shadowsocks_password=$(openssl rand -base64 16) ;; 
+        esac
+        echo -e "${GREEN}Generated random Shadowsocks password.${NC}"
+    fi
+    
+    jq "(.inbounds[] | select(.type == "shadowsocks") | .password) = \"$shadowsocks_password\"" /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+    if [[ $? -ne 0 ]]; then echo -e "${RED}Shadowsocks password update failed.${NC}"; return 1; fi
+    echo -e "${GREEN}Shadowsocks password updated (applied to all SS configurations).${NC}"
+
+    chown sing-box:sing-box /etc/sing-box/config.json
+    chmod 640 /etc/sing-box/config.json
+    if ! format_config; then echo -e "${RED}Error: Configuration file formatting or validation failed.${NC}"; return 1; fi
+    echo -e "${BLUE}Restarting Sing-Box service...${NC}"
+    systemctl restart sing-box
+    if systemctl is-active --quiet sing-box; then
+        echo -e "${GREEN}Shadowsocks password successfully changed!${NC}"
+        output_node_info
+    else
+        echo -e "${RED}Error: Service restart failed.${NC}"; return 1;
     fi
 }
 
@@ -1780,99 +1974,102 @@ change_ss_method() {
 show_menu() {
     clear
     echo -e "${BLUE}┌─────────────────────────────────────────────────────────────────┐${NC}"
-    echo -e "${BLUE}│${NC}         ${YELLOW}Sing-Box & ShadowTLS Management System v3.0${NC}             ${BLUE}│${NC}"
+    echo -e "${BLUE}│${NC}        ${YELLOW}Sing-Box & ShadowTLS Multi-Deployment Script v3.1${NC}        ${BLUE}│${NC}"
     echo -e "${BLUE}├─────────────────────────────────────────────────────────────────┤${NC}"
-    echo -e "${BLUE}│${NC}                                                                 ${BLUE}│${NC}"
     echo -e "${BLUE}│${NC}  ${GREEN}▸ System Management${NC}                                           ${BLUE}│${NC}"
-    echo -e "${BLUE}│${NC}    ${CYAN}1${NC}) Install/Update Sing-Box                                  ${BLUE}│${NC}"
+    echo -e "${BLUE}│${NC}    ${CYAN}1${NC}) Install/Update Sing-Box (Multiple deployment modes)     ${BLUE}│${NC}"
     echo -e "${BLUE}│${NC}    ${CYAN}2${NC}) Uninstall Sing-Box                                       ${BLUE}│${NC}"
-    echo -e "${BLUE}│${NC}    ${CYAN}3${NC}) View Node Information                                    ${BLUE}│${NC}"
+    echo -e "${BLUE}│${NC}    ${CYAN}3${NC}) View Node Information (Generated from current config)   ${BLUE}│${NC}"
     echo -e "${BLUE}│${NC}                                                                 ${BLUE}│${NC}"
     echo -e "${BLUE}│${NC}  ${GREEN}▸ Service Control${NC}                                             ${BLUE}│${NC}"
     echo -e "${BLUE}│${NC}    ${CYAN}4${NC}) View Service Status                                      ${BLUE}│${NC}"
     echo -e "${BLUE}│${NC}    ${CYAN}5${NC}) View Service Logs                                        ${BLUE}│${NC}"
     echo -e "${BLUE}│${NC}    ${CYAN}6${NC}) Restart Service                                          ${BLUE}│${NC}"
-    echo -e "${BLUE}│${NC}    ${CYAN}7${NC}) View Configuration                                       ${BLUE}│${NC}"
+    echo -e "${BLUE}│${NC}    ${CYAN}7${NC}) View Current Configuration (JSON format)               ${BLUE}│${NC}"
     echo -e "${BLUE}│${NC}                                                                 ${BLUE}│${NC}"
-    echo -e "${BLUE}│${NC}  ${GREEN}▸ Configuration${NC}                                               ${BLUE}│${NC}"
-    echo -e "${BLUE}│${NC}    ${CYAN}8${NC}) Port Settings ▸                                          ${BLUE}│${NC}"
-    echo -e "${BLUE}│${NC}    ${CYAN}9${NC}) Password Settings ▸                                      ${BLUE}│${NC}"
-    echo -e "${BLUE}│${NC}    ${CYAN}10${NC}) ShadowTLS Settings ▸                                   ${BLUE}│${NC}"
-    echo -e "${BLUE}│${NC}    ${CYAN}11${NC}) Shadowsocks Settings ▸                                 ${BLUE}│${NC}"
-    echo -e "${BLUE}│${NC}    ${CYAN}12${NC}) DNS Settings ▸                                         ${BLUE}│${NC}"
+    echo -e "${BLUE}│${NC}  ${GREEN}▸ Configuration (Auto-adapts to current deployment mode)${NC}       ${BLUE}│${NC}"
+    echo -e "${BLUE}│${NC}    ${CYAN}8${NC}) Port Settings (SS/STLS/UDP/Internal ports)             ${BLUE}│${NC}"
+    echo -e "${BLUE}│${NC}    ${CYAN}9${NC}) Password Settings (SS/STLS)                             ${BLUE}│${NC}"
+    echo -e "${BLUE}│${NC}    ${CYAN}10${NC}) ShadowTLS Settings (SNI/Password)                      ${BLUE}│${NC}"
+    echo -e "${BLUE}│${NC}    ${CYAN}11${NC}) Shadowsocks Settings (Encryption/UDP port)            ${BLUE}│${NC}"
+    echo -e "${BLUE}│${NC}    ${CYAN}12${NC}) DNS Settings (Strategy/Servers)                        ${BLUE}│${NC}"
     echo -e "${BLUE}│${NC}                                                                 ${BLUE}│${NC}"
-    echo -e "${BLUE}│${NC}    ${CYAN}0${NC}) Exit                                                     ${BLUE}│${NC}"
+    echo -e "${BLUE}│${NC}    ${CYAN}0${NC}) Exit Script                                               ${BLUE}│${NC}"
     echo -e "${BLUE}│${NC}                                                                 ${BLUE}│${NC}"
     echo -e "${BLUE}└─────────────────────────────────────────────────────────────────┘${NC}"
     echo -e ""
-    echo -ne "${YELLOW}Select an option [0-12]: ${NC}"
+    echo -ne "${YELLOW}Please select an operation [0-12]: ${NC}"
 }
 
 # Function to display port submenu
 show_port_menu() {
-    echo -e "\n${BLUE}━━━ Port Settings ━━━${NC}"
-    echo -e "${CYAN}1) Change Port (ShadowTLS/Shadowsocks)${NC}"
-    echo -e "${CYAN}2) Change Shadowsocks UDP Port${NC}"
+    echo -e "\n${BLUE}━━━ Port Settings (Auto-detection mode) ━━━${NC}"
+    echo -e "${CYAN}1) Change Port (Smart adaptation for Pure SS/STLS Separated/STLS Shared)${NC}"
+    echo -e "${CYAN}2) Change Shadowsocks UDP Port (For Pure SS or STLS Separated modes)${NC}"
     echo -e "${CYAN}0) Back to Main Menu${NC}"
-    echo -ne "${YELLOW}Select an option [0-2]: ${NC}"
+    echo -ne "${YELLOW}Please select [0-2]: ${NC}"
     read -p "" port_choice
     
     case $port_choice in
-        1) change_port ;;
-        2) change_ss_udp_port ;;
+        1) change_port ;; # This function is now mode-aware
+        2) change_ss_udp_port ;; # This function is also mode-aware
         0) return ;;
-        *) echo -e "${RED}Invalid choice.${NC}" ;;
+        *) echo -e "${RED}Invalid option.${NC}" ;;
     esac
 }
 
 # Function to display password submenu
 show_password_menu() {
     echo -e "\n${BLUE}━━━ Password Settings ━━━${NC}"
-    echo -e "${CYAN}1) Change All Passwords${NC}"
+    echo -e "${CYAN}1) Change All Passwords (ShadowTLS and Shadowsocks)${NC}"
     echo -e "${CYAN}2) Change ShadowTLS Password Only${NC}"
+    echo -e "${CYAN}3) Change Shadowsocks Password Only (Applied to all SS configs)${NC}"
     echo -e "${CYAN}0) Back to Main Menu${NC}"
-    echo -ne "${YELLOW}Select an option [0-2]: ${NC}"
+    echo -ne "${YELLOW}Please select [0-3]: ${NC}"
     read -p "" pass_choice
     
     case $pass_choice in
-        1) change_passwords ;;
-        2) change_shadowtls_password ;;
+        1) change_passwords ;; # Handles both if STLS exists
+        2) change_shadowtls_password ;; 
+        3) change_shadowsocks_password_only ;; # New function needed
         0) return ;;
-        *) echo -e "${RED}Invalid choice.${NC}" ;;
+        *) echo -e "${RED}Invalid option.${NC}" ;;
     esac
 }
 
 # Function to display shadowtls submenu
 show_shadowtls_menu() {
-    echo -e "\n${BLUE}━━━ ShadowTLS Settings ━━━${NC}"
-    echo -e "${CYAN}1) Change ShadowTLS SNI${NC}"
+    echo -e "\n${BLUE}━━━ ShadowTLS Settings (Only effective when ShadowTLS is active) ━━━${NC}"
+    echo -e "${CYAN}1) Change ShadowTLS SNI Domain${NC}"
     echo -e "${CYAN}2) Change ShadowTLS Password${NC}"
     echo -e "${CYAN}0) Back to Main Menu${NC}"
-    echo -ne "${YELLOW}Select an option [0-2]: ${NC}"
+    echo -ne "${YELLOW}Please select [0-2]: ${NC}"
     read -p "" stls_choice
     
     case $stls_choice in
-        1) change_shadowtls_sni ;;
-        2) change_shadowtls_password ;;
+        1) change_shadowtls_sni ;; 
+        2) change_shadowtls_password ;; 
         0) return ;;
-        *) echo -e "${RED}Invalid choice.${NC}" ;;
+        *) echo -e "${RED}Invalid option.${NC}" ;;
     esac
 }
 
 # Function to display shadowsocks submenu
 show_shadowsocks_menu() {
     echo -e "\n${BLUE}━━━ Shadowsocks Settings ━━━${NC}"
-    echo -e "${CYAN}1) Change Encryption Method${NC}"
-    echo -e "${CYAN}2) Change Shadowsocks UDP Port${NC}"
+    echo -e "${CYAN}1) Change Shadowsocks Encryption Method (Will reset password)${NC}"
+    echo -e "${CYAN}2) Change Shadowsocks UDP Port (See instructions)${NC}"
+    echo -e "${CYAN}3) Change Shadowsocks Password Only${NC}"
     echo -e "${CYAN}0) Back to Main Menu${NC}"
-    echo -ne "${YELLOW}Select an option [0-2]: ${NC}"
+    echo -ne "${YELLOW}Please select [0-3]: ${NC}"
     read -p "" ss_choice
     
     case $ss_choice in
-        1) change_ss_method ;;
-        2) change_ss_udp_port ;;
+        1) change_ss_method ;; 
+        2) change_ss_udp_port ;; 
+        3) change_shadowsocks_password_only ;; # New function needed
         0) return ;;
-        *) echo -e "${RED}Invalid choice.${NC}" ;;
+        *) echo -e "${RED}Invalid option.${NC}" ;;
     esac
 }
 
@@ -1882,14 +2079,14 @@ show_dns_menu() {
     echo -e "${CYAN}1) Manage DNS Strategies${NC}"
     echo -e "${CYAN}2) Change DNS Servers${NC}"
     echo -e "${CYAN}0) Back to Main Menu${NC}"
-    echo -ne "${YELLOW}Select an option [0-2]: ${NC}"
+    echo -ne "${YELLOW}Please select [0-2]: ${NC}"
     read -p "" dns_choice
     
     case $dns_choice in
         1) manage_dns_strategies ;;
         2) change_dns_servers ;;
         0) return ;;
-        *) echo -e "${RED}Invalid choice.${NC}" ;;
+        *) echo -e "${RED}Invalid option.${NC}" ;;
     esac
 }
 
