@@ -5,7 +5,7 @@ RED='\033[0;31m'    # Error/Warning
 GREEN='\033[0;32m'  # Success
 YELLOW='\033[1;33m' # Accent/CTA/Input prompts (Bold Yellow)
 BLUE='\033[0;34m'   # Primary/Titles
-MAGENTA='\033[0;35m'# Special Data (e.g., node password parts)
+MAGENTA='\033[0;35m' # Special Data (e.g., node password parts)
 CYAN='\033[0;36m'   # Secondary/Information/Options
 NC='\033[0m'      # No Color
 
