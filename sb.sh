@@ -1091,7 +1091,7 @@ change_port() {
                ;; 
             *) echo -e "${RED}Invalid option.${NC}"; return 1;;
         esac
-
+        
         if [[ "$target_tag" == "shadowsocks-in" ]]; then
              current_port=$(jq -r --arg tag_val "$target_tag" '.inbounds[] | select(.tag == $tag_val and .listen == "127.0.0.1") | .listen_port' /etc/sing-box/config.json)
         else
@@ -1136,6 +1136,7 @@ change_port() {
             new_port=$(shuf -i 10000-65535 -n 1)
             echo -e "${CYAN}Generated random port: ${MAGENTA}$new_port${NC}"
         fi
+
         if ! validate_and_check_port "$new_port" "$current_port"; then return 1; fi
 
         if [[ $is_shared_port_change -eq 1 ]]; then
@@ -1448,8 +1449,7 @@ change_shadowtls_sni() {
         18)
             read -p "Enter custom domain (e.g., www.example.com): " new_sni
             if [[ -z "$new_sni" ]]; then
-                echo -e "${RED}Error: Domain cannot be empty.${NC}"
-                return 1
+                new_sni="p11.douyinpic.com"
             fi
             ;;
         *)
@@ -1843,25 +1843,21 @@ change_shadowsocks_password_only(){
 show_menu() {
     clear
     echo -e "${YELLOW}Sing-Box & ShadowTLS Multi-Deployment Script v3.1${NC}"
-    echo -e "${GREEN}System Management${NC}"
+    echo -e ""
     echo -e "  ${CYAN}1) Install/Update Sing-Box (Multiple deployment modes)${NC}"
     echo -e "  ${CYAN}2) Uninstall Sing-Box${NC}"
     echo -e "  ${CYAN}3) View Node Information (Generated from current config)${NC}"
-    echo -e "
-${GREEN}Service Control${NC}"
     echo -e "  ${CYAN}4) View Service Status${NC}"
     echo -e "  ${CYAN}5) View Service Logs${NC}"
     echo -e "  ${CYAN}6) Restart Service${NC}"
     echo -e "  ${CYAN}7) View Current Configuration (JSON format)${NC}"
-    echo -e "
-${GREEN}Configuration (Auto-adapts to current deployment mode)${NC}"
     echo -e "  ${CYAN}8) Port Settings (SS/STLS/UDP/Internal ports)${NC}"
     echo -e "  ${CYAN}9) Password Settings (SS/STLS)${NC}"
     echo -e "  ${CYAN}10) ShadowTLS Settings (SNI/Password)${NC}"
     echo -e "  ${CYAN}11) Shadowsocks Settings (Encryption/UDP port)${NC}"
     echo -e "  ${CYAN}12) DNS Settings (Strategy/Servers)${NC}"
-    echo -e "
-  ${CYAN}0) Exit Script${NC}"
+    echo -e ""
+    echo -e "  ${CYAN}0) Exit Script${NC}"
     echo -e ""
     echo -ne "${YELLOW}Please select an operation [0-12]: ${NC}"
 }
