@@ -1131,6 +1131,7 @@ change_port() {
         esac
         
         echo -e "${CYAN}Current $service_name_display port: ${MAGENTA}$current_port${NC}"
+        
         read -p "$(echo -e "${YELLOW}Please enter new $service_name_display port (10000-65535, Enter for random): ${NC}")" new_port
         if [[ -z "$new_port" ]]; then
             new_port=$(shuf -i 10000-65535 -n 1)
@@ -1446,7 +1447,7 @@ change_shadowtls_sni() {
         15) new_sni="publicassets.cdn-apple.com" ;;
         16) new_sni="weather-data.apple.com" ;;
         17) new_sni="gateway.icloud.com" ;;
-        18)
+        18) 
             read -p "Enter custom domain (e.g., www.example.com): " new_sni
             if [[ -z "$new_sni" ]]; then
                 new_sni="p11.douyinpic.com"
@@ -1824,10 +1825,10 @@ change_shadowsocks_password_only(){
     
     jq "(.inbounds[] | select(.type == "shadowsocks") | .password) = \"$shadowsocks_password\"" /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
     if [[ $? -ne 0 ]]; then echo -e "${RED}Shadowsocks password update failed.${NC}"; return 1; fi
-    echo -e "${GREEN}Shadowsocks password updated (applied to all SS configurations).${NC}"
-
+        
     chown sing-box:sing-box /etc/sing-box/config.json
     chmod 640 /etc/sing-box/config.json
+    
     if ! format_config; then echo -e "${RED}Error: Configuration file formatting or validation failed.${NC}"; return 1; fi
     echo -e "${BLUE}Restarting Sing-Box service...${NC}"
     systemctl restart sing-box
@@ -1864,7 +1865,6 @@ show_menu() {
 
 # Function to display port submenu
 show_port_menu() {
-    echo -e "\n${BLUE}Port Settings (Auto-detection mode)${NC}"
     echo -e "${CYAN}1) Change Port (Smart adaptation for Pure SS/STLS Separated/STLS Shared)${NC}"
     echo -e "${CYAN}2) Change Shadowsocks UDP Port (For Pure SS or STLS Separated modes)${NC}"
     echo -e "${CYAN}0) Back to Main Menu${NC}"
@@ -1881,7 +1881,6 @@ show_port_menu() {
 
 # Function to display password submenu
 show_password_menu() {
-    echo -e "\n${BLUE}Password Settings${NC}"
     echo -e "${CYAN}1) Change All Passwords (ShadowTLS and Shadowsocks)${NC}"
     echo -e "${CYAN}2) Change ShadowTLS Password Only${NC}"
     echo -e "${CYAN}3) Change Shadowsocks Password Only (Applied to all SS configs)${NC}"
@@ -1900,7 +1899,6 @@ show_password_menu() {
 
 # Function to display shadowtls submenu
 show_shadowtls_menu() {
-    echo -e "\n${BLUE}ShadowTLS Settings (Only effective when ShadowTLS is active)${NC}"
     echo -e "${CYAN}1) Change ShadowTLS SNI Domain${NC}"
     echo -e "${CYAN}2) Change ShadowTLS Password${NC}"
     echo -e "${CYAN}0) Back to Main Menu${NC}"
@@ -1917,7 +1915,6 @@ show_shadowtls_menu() {
 
 # Function to display shadowsocks submenu
 show_shadowsocks_menu() {
-    echo -e "\n${BLUE}Shadowsocks Settings${NC}"
     echo -e "${CYAN}1) Change Shadowsocks Encryption Method (Will reset password)${NC}"
     echo -e "${CYAN}2) Change Shadowsocks UDP Port (See instructions)${NC}"
     echo -e "${CYAN}3) Change Shadowsocks Password Only${NC}"
@@ -1936,7 +1933,6 @@ show_shadowsocks_menu() {
 
 # Function to display DNS submenu
 show_dns_menu() {
-    echo -e "\n${BLUE}DNS Settings${NC}"
     echo -e "${CYAN}1) Manage DNS Strategies${NC}"
     echo -e "${CYAN}2) Change DNS Servers${NC}"
     echo -e "${CYAN}0) Back to Main Menu${NC}"
