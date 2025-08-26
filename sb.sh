@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# 错误处理
+set -uo pipefail
+
 # Colors
 RED='\033[0;31m'    # Error/Warning
 GREEN='\033[0;32m'  # Success
@@ -9,6 +12,19 @@ MAGENTA='\033[0;35m' # Special Data (e.g., node password parts)
 CYAN='\033[0;36m'   # Secondary/Information/Options
 NC='\033[0m'      # No Color
 
+# 版本信息
+SCRIPT_VERSION="3.2"
+SCRIPT_NAME="Sing-Box & ShadowTLS Multi-Deployment Script"
+
+# 日志配置
+LOG_DIR="/var/log/sing-box"
+LOG_FILE="${LOG_DIR}/installer.log"
+DEBUG_MODE=${DEBUG_MODE:-0}
+
+# 配置目录
+CONFIG_DIR="/etc/sing-box"
+BACKUP_DIR="${CONFIG_DIR}/backups"
+
 # Global IP variables
 ipv4_address=""
 ipv6_address=""
@@ -17,39 +33,147 @@ has_ipv6=0
 primary_ip=""
 country_code=""
 
+# 初始化日志目录
+init_logging() {
+    if [[ ! -d "$LOG_DIR" ]]; then
+        mkdir -p "$LOG_DIR"
+        chmod 755 "$LOG_DIR"
+    fi
+    # 日志轮转（保留最近10个日志文件）
+    if [[ -f "$LOG_FILE" ]] && [[ $(stat -c%s "$LOG_FILE" 2>/dev/null || stat -f%z "$LOG_FILE" 2>/dev/null || echo 0) -gt 10485760 ]]; then
+        mv "$LOG_FILE" "${LOG_FILE}.$(date +%Y%m%d_%H%M%S)"
+        find "$LOG_DIR" -name "installer.log.*" -type f | sort -r | tail -n +10 | xargs rm -f 2>/dev/null || true
+    fi
+}
+
+# 日志记录函数
+log() {
+    local level="$1"
+    shift
+    local message="$*"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    
+    # 写入日志文件
+    echo "[$timestamp] [$level] $message" >> "$LOG_FILE" 2>/dev/null || true
+    
+    # 控制台输出
+    case "$level" in
+        ERROR)   echo -e "${RED}[错误] $message${NC}" >&2 ;;
+        WARN)    echo -e "${YELLOW}[警告] $message${NC}" ;;
+        INFO)    echo -e "${CYAN}[信息] $message${NC}" ;;
+        SUCCESS) echo -e "${GREEN}[成功] $message${NC}" ;;
+        DEBUG)   [[ $DEBUG_MODE -eq 1 ]] && echo -e "${MAGENTA}[调试] $message${NC}" ;;
+    esac
+}
+
+# 错误处理函数
+error_handler() {
+    local exit_code=$?
+    local line_no=${1:-$LINENO}
+    
+    log ERROR "错误发生在第 $line_no 行，退出码: $exit_code"
+    
+    # 提示用户查看日志
+    if [[ $exit_code -ne 0 ]]; then
+        echo -e "${YELLOW}详细错误信息已记录到: $LOG_FILE${NC}"
+        echo -e "${YELLOW}使用命令查看: tail -n 50 $LOG_FILE${NC}"
+    fi
+}
+
+# 设置错误捕获
+trap 'error_handler $LINENO' ERR
+
+# 进度条显示函数
+show_progress() {
+    local current=$1
+    local total=$2
+    local message="${3:-处理中}"
+    local width=50
+    
+    if [[ $total -eq 0 ]]; then
+        return
+    fi
+    
+    local percentage=$((current * 100 / total))
+    local filled=$((width * current / total))
+    
+    printf "\r%s [" "$message"
+    printf "%${filled}s" | tr ' ' '='
+    printf "%$((width - filled))s" | tr ' ' '-'
+    printf "] %d%%" $percentage
+    
+    if [[ $current -eq $total ]]; then
+        echo
+    fi
+}
+
+# 操作确认函数
+confirm_action() {
+    local message="${1:-确认执行此操作？}"
+    local default="${2:-n}"
+    
+    if [[ "$default" == "y" ]]; then
+        read -p "$(echo -e "${YELLOW}${message} [Y/n]: ${NC}")" -n 1 -r response
+    else
+        read -p "$(echo -e "${YELLOW}${message} [y/N]: ${NC}")" -n 1 -r response
+    fi
+    echo
+    
+    if [[ -z "$response" ]]; then
+        response="$default"
+    fi
+    
+    [[ "$response" =~ ^[Yy]$ ]]
+}
+
+# 初始化日志系统
+init_logging
+
 # Function to check root privileges
 check_root() {
     if [[ $EUID -ne 0 ]]; then
-        echo -e "${RED}Error: This script must be run as root.${NC}"
+        log ERROR "脚本必须以 root 权限运行"
+        echo -e "${RED}错误: 此脚本必须以 root 权限运行${NC}"
         exit 1
     fi
+    log INFO "Root 权限检查通过"
 }
 
 # Function to check system compatibility (Debian/Ubuntu only)
 check_system() {
+    log INFO "检查系统兼容性..."
     if [[ -f /etc/redhat-release ]]; then
-        echo -e "${RED}Error: This script is only compatible with Debian/Ubuntu systems.${NC}"
+        log ERROR "不支持的系统: RedHat/CentOS"
+        echo -e "${RED}错误: 此脚本仅支持 Debian/Ubuntu 系统${NC}"
         exit 1
     fi
     if ! command -v systemctl >/dev/null 2>&1; then
-        echo -e "${RED}Error: systemctl not found. This script requires a systemd-based system.${NC}"
+        log ERROR "systemctl 未找到"
+        echo -e "${RED}错误: 未找到 systemctl，需要 systemd 系统${NC}"
         exit 1
     fi
+    log SUCCESS "系统兼容性检查通过"
 }
 
 # Function to install dependencies
 install_dependencies() {
-    echo -e "${BLUE}Checking and Installing Dependencies${NC}"
+    log INFO "开始检查和安装依赖"
+    echo -e "${BLUE}检查和安装依赖项${NC}"
     local update_needed=0
     if ! command -v curl >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
         update_needed=1
     fi
 
     if [[ $update_needed -eq 1 ]]; then
-        echo -e "${CYAN}Updating package lists...${NC}"
-        apt update || { echo -e "${RED}Error: apt update failed. Please check your network and repositories.${NC}"; exit 1; }
+        echo -e "${CYAN}更新软件包列表...${NC}"
+        log INFO "执行 apt update"
+        apt update || { 
+            log ERROR "apt update 失败"
+            echo -e "${RED}错误: apt update 失败，请检查网络和软件源${NC}"
+            exit 1
+        }
     else
-        echo -e "${GREEN}Package lists are up to date.${NC}"
+        echo -e "${GREEN}软件包列表已是最新${NC}"
     fi
 
     local packages_to_install=()
@@ -61,12 +185,273 @@ install_dependencies() {
     fi
 
     if [[ ${#packages_to_install[@]} -gt 0 ]]; then
-        echo -e "${CYAN}Installing missing dependencies: ${packages_to_install[*]}...${NC}"
-        apt install -y "${packages_to_install[@]}" || { echo -e "${RED}Error: Failed to install dependencies (${packages_to_install[*]}).${NC}"; exit 1; }
-        echo -e "${GREEN}Dependencies installed successfully.${NC}"
+        echo -e "${CYAN}安装缺失的依赖: ${packages_to_install[*]}...${NC}"
+        log INFO "安装软件包: ${packages_to_install[*]}"
+        apt install -y "${packages_to_install[@]}" || { 
+            log ERROR "安装依赖失败: ${packages_to_install[*]}"
+            echo -e "${RED}错误: 安装依赖失败 (${packages_to_install[*]})${NC}"
+            exit 1
+        }
+        log SUCCESS "依赖安装成功"
+        echo -e "${GREEN}依赖安装成功${NC}"
     else
-        echo -e "${GREEN}All required dependencies (curl, jq) are already installed.${NC}"
+        echo -e "${GREEN}所有必需的依赖 (curl, jq) 已安装${NC}"
     fi
+}
+
+# 配置备份函数
+backup_config() {
+    log INFO "开始备份配置文件"
+    
+    if [[ ! -f "$CONFIG_DIR/config.json" ]]; then
+        echo -e "${YELLOW}没有找到配置文件，跳过备份${NC}"
+        return 1
+    fi
+    
+    # 创建备份目录
+    mkdir -p "$BACKUP_DIR"
+    
+    # 生成备份文件名
+    local backup_file="$BACKUP_DIR/config_$(date +%Y%m%d_%H%M%S).json"
+    
+    # 复制配置文件
+    cp "$CONFIG_DIR/config.json" "$backup_file"
+    
+    if [[ $? -eq 0 ]]; then
+        log SUCCESS "配置备份成功: $backup_file"
+        echo -e "${GREEN}配置已备份到: $backup_file${NC}"
+        
+        # 保留最近10个备份
+        local backup_count=$(ls -1 "$BACKUP_DIR"/config_*.json 2>/dev/null | wc -l)
+        if [[ $backup_count -gt 10 ]]; then
+            ls -1t "$BACKUP_DIR"/config_*.json | tail -n +11 | xargs rm -f
+            log INFO "清理旧备份文件"
+        fi
+    else
+        log ERROR "备份失败"
+        echo -e "${RED}备份失败${NC}"
+        return 1
+    fi
+}
+
+# 配置恢复函数
+restore_config() {
+    log INFO "开始恢复配置"
+    
+    # 检查备份目录
+    if [[ ! -d "$BACKUP_DIR" ]] || [[ -z $(ls -A "$BACKUP_DIR" 2>/dev/null) ]]; then
+        echo -e "${YELLOW}没有找到可用的备份文件${NC}"
+        return 1
+    fi
+    
+    echo -e "${BLUE}可用的备份文件:${NC}"
+    
+    # 列出所有备份
+    local backups=($(ls -1t "$BACKUP_DIR"/config_*.json 2>/dev/null))
+    local count=0
+    
+    for backup in "${backups[@]}"; do
+        count=$((count + 1))
+        local backup_name=$(basename "$backup")
+        local backup_time=$(echo "$backup_name" | sed 's/config_//g' | sed 's/.json//g' | sed 's/_/ /g')
+        echo -e "  ${CYAN}$count) $backup_time${NC}"
+    done
+    
+    # 选择备份
+    echo -ne "${YELLOW}请选择要恢复的备份 [1-$count]: ${NC}"
+    read -r choice
+    
+    if [[ ! "$choice" =~ ^[0-9]+$ ]] || [[ $choice -lt 1 ]] || [[ $choice -gt $count ]]; then
+        echo -e "${RED}无效的选择${NC}"
+        return 1
+    fi
+    
+    local selected_backup="${backups[$((choice-1))]}"
+    
+    # 确认恢复
+    if confirm_action "确定要恢复此备份吗？当前配置将被覆盖"; then
+        # 备份当前配置
+        if [[ -f "$CONFIG_DIR/config.json" ]]; then
+            backup_config
+        fi
+        
+        # 恢复配置
+        cp "$selected_backup" "$CONFIG_DIR/config.json"
+        
+        if [[ $? -eq 0 ]]; then
+            log SUCCESS "配置恢复成功"
+            echo -e "${GREEN}配置恢复成功${NC}"
+            
+            # 重启服务
+            echo -e "${CYAN}正在重启服务...${NC}"
+            systemctl restart sing-box
+            
+            if [[ $? -eq 0 ]]; then
+                echo -e "${GREEN}服务重启成功${NC}"
+            else
+                echo -e "${RED}服务重启失败，请手动检查${NC}"
+            fi
+        else
+            log ERROR "配置恢复失败"
+            echo -e "${RED}配置恢复失败${NC}"
+            return 1
+        fi
+    else
+        echo -e "${YELLOW}已取消恢复${NC}"
+    fi
+}
+
+# 健康检查函数
+health_check() {
+    echo -e "\n${BLUE}Sing-Box 健康检查${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════${NC}"
+    
+    local issues=0
+    
+    # 检查服务状态
+    echo -ne "${CYAN}服务状态... ${NC}"
+    if systemctl is-active --quiet sing-box; then
+        echo -e "${GREEN}✓ 运行中${NC}"
+    else
+        echo -e "${RED}✗ 未运行${NC}"
+        issues=$((issues + 1))
+    fi
+    
+    # 检查配置文件
+    echo -ne "${CYAN}配置文件... ${NC}"
+    if [[ -f "$CONFIG_DIR/config.json" ]]; then
+        if sing-box check -c "$CONFIG_DIR/config.json" &>/dev/null; then
+            echo -e "${GREEN}✓ 有效${NC}"
+        else
+            echo -e "${RED}✗ 配置错误${NC}"
+            issues=$((issues + 1))
+        fi
+    else
+        echo -e "${RED}✗ 不存在${NC}"
+        issues=$((issues + 1))
+    fi
+    
+    # 检查端口监听
+    echo -ne "${CYAN}端口监听... ${NC}"
+    if [[ -f "$CONFIG_DIR/config.json" ]]; then
+        local ports=$(jq -r '.inbounds[].listen_port' "$CONFIG_DIR/config.json" 2>/dev/null | sort -u)
+        local listening_count=0
+        local total_ports=0
+        
+        for port in $ports; do
+            if [[ -n "$port" ]] && [[ "$port" != "null" ]]; then
+                total_ports=$((total_ports + 1))
+                if ss -tuln | grep -q ":$port "; then
+                    listening_count=$((listening_count + 1))
+                fi
+            fi
+        done
+        
+        if [[ $total_ports -gt 0 ]]; then
+            if [[ $listening_count -eq $total_ports ]]; then
+                echo -e "${GREEN}✓ 所有端口正常 ($listening_count/$total_ports)${NC}"
+            else
+                echo -e "${YELLOW}⚠ 部分端口异常 ($listening_count/$total_ports)${NC}"
+                issues=$((issues + 1))
+            fi
+        else
+            echo -e "${YELLOW}⚠ 无端口配置${NC}"
+        fi
+    else
+        echo -e "${RED}✗ 无法检查${NC}"
+    fi
+    
+    echo -e "${CYAN}═══════════════════════════════════════${NC}"
+    
+    # 结果汇总
+    if [[ $issues -eq 0 ]]; then
+        echo -e "${GREEN}状态: 一切正常${NC}"
+    else
+        echo -e "${YELLOW}状态: 发现 $issues 个问题${NC}"
+    fi
+}
+
+# 系统优化函数
+optimize_system() {
+    echo -e "\n${BLUE}系统优化${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════${NC}"
+    
+    log INFO "开始系统优化"
+    
+    # BBR 加速
+    echo -e "${CYAN}启用 BBR 加速...${NC}"
+    
+    # 检查内核版本
+    local kernel_version=$(uname -r | cut -d. -f1,2)
+    local major=$(echo $kernel_version | cut -d. -f1)
+    local minor=$(echo $kernel_version | cut -d. -f2)
+    
+    if [[ $major -gt 4 ]] || ([[ $major -eq 4 ]] && [[ $minor -ge 9 ]]); then
+        # 启用 BBR
+        if ! sysctl net.ipv4.tcp_congestion_control | grep -q bbr; then
+            echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
+            echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+            sysctl -p &>/dev/null
+            
+            if sysctl net.ipv4.tcp_congestion_control | grep -q bbr; then
+                echo -e "${GREEN}✓ BBR 启用成功${NC}"
+                log SUCCESS "BBR 启用成功"
+            else
+                echo -e "${YELLOW}⚠ BBR 启用失败${NC}"
+                log WARN "BBR 启用失败"
+            fi
+        else
+            echo -e "${GREEN}✓ BBR 已启用${NC}"
+        fi
+    else
+        echo -e "${YELLOW}⚠ 内核版本过低，无法启用 BBR${NC}"
+        log WARN "内核版本过低: $kernel_version"
+    fi
+    
+    # 系统参数优化
+    echo -e "${CYAN}优化系统参数...${NC}"
+    
+    cat >> /etc/sysctl.conf <<EOF
+# Sing-Box 优化参数
+net.ipv4.tcp_fastopen=3
+net.ipv4.tcp_syncookies=1
+net.ipv4.tcp_tw_reuse=1
+net.ipv4.ip_local_port_range=10000 65000
+net.ipv4.tcp_max_syn_backlog=8192
+net.core.netdev_max_backlog=8192
+net.ipv4.tcp_rmem=4096 87380 67108864
+net.ipv4.tcp_wmem=4096 65536 67108864
+net.core.rmem_max=67108864
+net.core.wmem_max=67108864
+net.ipv4.tcp_mtu_probing=1
+EOF
+    
+    sysctl -p &>/dev/null
+    echo -e "${GREEN}✓ 系统参数优化完成${NC}"
+    log SUCCESS "系统参数优化完成"
+    
+    # 防火墙配置
+    echo -e "${CYAN}配置防火墙规则...${NC}"
+    
+    if command -v ufw &>/dev/null; then
+        # 如果使用 ufw
+        if [[ -f "$CONFIG_DIR/config.json" ]]; then
+            local ports=$(jq -r '.inbounds[].listen_port' "$CONFIG_DIR/config.json" 2>/dev/null | sort -u)
+            for port in $ports; do
+                if [[ -n "$port" ]] && [[ "$port" != "null" ]]; then
+                    ufw allow $port/tcp &>/dev/null
+                    ufw allow $port/udp &>/dev/null
+                fi
+            done
+            echo -e "${GREEN}✓ 防火墙规则已更新${NC}"
+        fi
+    elif command -v iptables &>/dev/null; then
+        # 如果使用 iptables
+        echo -e "${YELLOW}⚠ 请手动配置 iptables 规则${NC}"
+    fi
+    
+    echo -e "${CYAN}═══════════════════════════════════════${NC}"
+    echo -e "${GREEN}系统优化完成${NC}"
 }
 
 # Function to get IP information
@@ -182,20 +567,29 @@ output_node_info() {
         local sni
         sni=$(jq -r '.inbounds[] | select(.type == "shadowtls") | .handshake.server' /etc/sing-box/config.json)
 
-        # Check if there's a separated UDP port
+        # Check if there's a separated UDP port and compare with ShadowTLS port
         if [[ $separated_udp_exists -eq 0 ]]; then
             local udp_port
             udp_port=$(jq -r '.inbounds[] | select(.type == "shadowsocks" and .network == "udp" and .listen != "127.0.0.1") | .listen_port' /etc/sing-box/config.json)
             
-            echo -e "${CYAN}${country_code} [ss2022][shadow-tls-v3][separated-ports]${NC} = ${MAGENTA}ss, ${primary_ip}, ${stls_port}, encrypt-method=${ss_method}, password=${ss_pwd}, shadow-tls-password=${shadowtls_pwd}, shadow-tls-sni=${sni}, shadow-tls-version=3, udp-relay=true, udp-port=${udp_port}${NC}"
-            
-            echo -e "\n${BLUE}Optional Configurations${NC}"
-            echo -e "${CYAN}${country_code} [ss2022][TCP-only]${NC} = ${MAGENTA}ss, ${primary_ip}, ${stls_port}, encrypt-method=${ss_method}, password=${ss_pwd}, shadow-tls-password=${shadowtls_pwd}, shadow-tls-sni=${sni}, shadow-tls-version=3, udp-relay=false${NC}"
-            echo -e "${CYAN}${country_code} [ss2022][UDP-only]${NC} = ${MAGENTA}ss, ${primary_ip}, ${udp_port}, encrypt-method=${ss_method}, password=${ss_pwd}, udp-relay=true${NC}"
-            
-            echo -e "\n${YELLOW}Note: Separated ports configuration - TCP via ShadowTLS obfuscation (${stls_port}), UDP direct (${udp_port})${NC}"
+            # Check if UDP port is actually different from ShadowTLS port
+            if [[ "$udp_port" != "$stls_port" ]]; then
+                # Truly separated ports
+                echo -e "${CYAN}${country_code} [ss2022][shadow-tls-v3][separated-ports]${NC} = ${MAGENTA}ss, ${primary_ip}, ${stls_port}, encrypt-method=${ss_method}, password=${ss_pwd}, shadow-tls-password=${shadowtls_pwd}, shadow-tls-sni=${sni}, shadow-tls-version=3, udp-relay=true, udp-port=${udp_port}${NC}"
+                
+                echo -e "\n${BLUE}Optional Configurations${NC}"
+                echo -e "${CYAN}${country_code} [ss2022][TCP-only]${NC} = ${MAGENTA}ss, ${primary_ip}, ${stls_port}, encrypt-method=${ss_method}, password=${ss_pwd}, shadow-tls-password=${shadowtls_pwd}, shadow-tls-sni=${sni}, shadow-tls-version=3, udp-relay=false${NC}"
+                echo -e "${CYAN}${country_code} [ss2022][UDP-only]${NC} = ${MAGENTA}ss, ${primary_ip}, ${udp_port}, encrypt-method=${ss_method}, password=${ss_pwd}, udp-relay=true${NC}"
+                
+                echo -e "\n${YELLOW}Note: Separated ports configuration - TCP via ShadowTLS obfuscation (${stls_port}), UDP direct (${udp_port})${NC}"
+            else
+                # Same port but configured as UDP separate listener (should be treated as shared)
+                echo -e "${CYAN}${country_code} [ss2022][shadow-tls-v3][shared-port]${NC} = ${MAGENTA}ss, ${primary_ip}, ${stls_port}, encrypt-method=${ss_method}, password=${ss_pwd}, shadow-tls-password=${shadowtls_pwd}, shadow-tls-sni=${sni}, shadow-tls-version=3, udp-relay=true${NC}"
+                
+                echo -e "\n${YELLOW}Note: Shared port configuration - Both TCP and UDP use port ${stls_port} (experimental feature)${NC}"
+            fi
         else
-            # Shared port configuration (experimental)
+            # No separated UDP configuration - shared port
             echo -e "${CYAN}${country_code} [ss2022][shadow-tls-v3][shared-port]${NC} = ${MAGENTA}ss, ${primary_ip}, ${stls_port}, encrypt-method=${ss_method}, password=${ss_pwd}, shadow-tls-password=${shadowtls_pwd}, shadow-tls-sni=${sni}, shadow-tls-version=3, udp-relay=true${NC}"
             
             echo -e "\n${YELLOW}Note: Shared port configuration - Both TCP and UDP use port ${stls_port} (experimental feature)${NC}"
@@ -514,52 +908,78 @@ install_sing_box() {
     local proxysite=""
     local wildcard_sni=""
     if [[ $use_shadowtls -gt 0 ]]; then
-        echo -e "${YELLOW}Select ShadowTLS SNI:${NC}"
-        echo -e "  ${CYAN}1) p11.douyinpic.com (Douyin Image CDN - Default)${NC}"
-        echo -e "  ${CYAN}2) mp.weixin.qq.com (WeChat)${NC}"
-        echo -e "  ${CYAN}3) coding.net${NC}"
-        echo -e "  ${CYAN}4) upyun.com (UpYun CDN)${NC}"
-        echo -e "  ${CYAN}5) sns-video-hw.xhscdn.com (XiaoHongShu Video)${NC}"
-        echo -e "  ${CYAN}6) sns-img-qc.xhscdn.com (XiaoHongShu Image)${NC}"
-        echo -e "  ${CYAN}7) sns-video-qn.xhscdn.com (XiaoHongShu Video)${NC}"
-        echo -e "  ${CYAN}8) p6-dy.byteimg.com (ByteDance CDN)${NC}"
-        echo -e "  ${CYAN}9) p9-dy.byteimg.com (ByteDance CDN)${NC}"
-        echo -e "  ${CYAN}10) feishu.cn (Feishu/Lark)${NC}"
-        echo -e "  ${CYAN}11) douyin.com${NC}"
-        echo -e "  ${CYAN}12) toutiao.com${NC}"
-        echo -e "  ${CYAN}13) v6-dy-y.ixigua.com${NC}"
-        echo -e "  ${CYAN}14) hls3-akm.douyucdn.cn (Douyu CDN)${NC}"
-        echo -e "  ${CYAN}15) publicassets.cdn-apple.com (Apple CDN)${NC}"
-        echo -e "  ${CYAN}16) weather-data.apple.com${NC}"
-        echo -e "  ${CYAN}17) gateway.icloud.com (Most Stable)${NC}"
-        echo -e "  ${CYAN}18) Custom domain${NC}"
+        echo -e "\n${CYAN}Performing TLS 1.3 validation for SNI domains...${NC}"
+        validate_sni_domains
         
-        read -p "$(echo -e "${YELLOW}Enter your choice [1-18] (Default: 1): ${NC}")" sni_choice
-        case "$sni_choice" in
-            2) proxysite="mp.weixin.qq.com" ;;
-            3) proxysite="coding.net" ;;
-            4) proxysite="upyun.com" ;;
-            5) proxysite="sns-video-hw.xhscdn.com" ;;
-            6) proxysite="sns-img-qc.xhscdn.com" ;;
-            7) proxysite="sns-video-qn.xhscdn.com" ;;
-            8) proxysite="p6-dy.byteimg.com" ;;
-            9) proxysite="p9-dy.byteimg.com" ;;
-            10) proxysite="feishu.cn" ;;
-            11) proxysite="douyin.com" ;;
-            12) proxysite="toutiao.com" ;;
-            13) proxysite="v6-dy-y.ixigua.com" ;;
-            14) proxysite="hls3-akm.douyucdn.cn" ;;
-            15) proxysite="publicassets.cdn-apple.com" ;;
-            16) proxysite="weather-data.apple.com" ;;
-            17) proxysite="gateway.icloud.com" ;;
-            18) 
-                read -p "$(echo -e "${YELLOW}Enter custom domain: ${NC}")" proxysite
-                if [[ -z "$proxysite" ]]; then
-                    proxysite="p11.douyinpic.com"
-                fi
-                ;;
-            *) proxysite="p11.douyinpic.com" ;;
-        esac
+        # Build dynamic SNI menu based on validated domains
+        echo -e "\n${YELLOW}Select ShadowTLS SNI (TLS 1.3 verified domains only):${NC}"
+        
+        # Define all domains with their info (TLS 1.3 verified)
+        declare -A all_sni_domains=(
+            ["p11.douyinpic.com"]="Douyin Image CDN - Default"
+            ["mp.weixin.qq.com"]="WeChat"
+            ["coding.net"]="Coding.net"
+            ["upyun.com"]="UpYun CDN"
+            ["sns-video-hw.xhscdn.com"]="XiaoHongShu Video"
+            ["sns-video-qn.xhscdn.com"]="XiaoHongShu Video"
+            ["p6-dy.byteimg.com"]="ByteDance CDN"
+            ["feishu.cn"]="Feishu/Lark"
+            ["douyin.com"]="Douyin"
+            ["toutiao.com"]="Toutiao"
+            ["v6-dy-y.ixigua.com"]="Ixigua Video"
+            ["hls3-akm.douyucdn.cn"]="Douyu CDN"
+            ["publicassets.cdn-apple.com"]="Apple CDN"
+            ["weather-data.apple.com"]="Apple Weather"
+            ["gateway.icloud.com"]="iCloud Gateway - Most Stable"
+        )
+        
+        # Convert VALID_TLS13_DOMAINS to array
+        read -ra valid_domains_array <<< "$VALID_TLS13_DOMAINS"
+        
+        # Build menu
+        declare -a menu_domains=()
+        local menu_index=1
+        declare -A choice_to_domain=()
+        
+        for domain in "${valid_domains_array[@]}"; do
+            if [[ -n "$domain" ]]; then
+                echo -e "  ${CYAN}$menu_index) $domain (${all_sni_domains[$domain]}) ${GREEN}✓${NC}"
+                choice_to_domain[$menu_index]="$domain"
+                menu_domains+=("$domain")
+                ((menu_index++))
+            fi
+        done
+        
+        echo -e "  ${CYAN}$menu_index) Custom domain${NC}"
+        
+        # Set default to first valid domain or fallback
+        local default_domain="${valid_domains_array[0]}"
+        if [[ -z "$default_domain" ]]; then
+            default_domain="p11.douyinpic.com"
+        fi
+        
+        read -p "$(echo -e "${YELLOW}Enter your choice [1-$menu_index] (Default: 1 - $default_domain): ${NC}")" sni_choice
+        
+        if [[ "$sni_choice" == "$menu_index" ]]; then
+            # Custom domain
+            read -p "$(echo -e "${YELLOW}Enter custom domain: ${NC}")" proxysite
+            if [[ -z "$proxysite" ]]; then
+                proxysite="$default_domain"
+            fi
+            # Optionally verify custom domain
+            echo -e "${CYAN}Verifying custom domain TLS 1.3 support...${NC}"
+            if check_tls13_support "$proxysite"; then
+                echo -e "${GREEN}✓ Custom domain $proxysite supports TLS 1.3${NC}"
+            else
+                echo -e "${YELLOW}⚠ Warning: Custom domain $proxysite may not support TLS 1.3${NC}"
+            fi
+        elif [[ -n "${choice_to_domain[$sni_choice]}" ]]; then
+            proxysite="${choice_to_domain[$sni_choice]}"
+        else
+            # Invalid choice or empty, use default
+            proxysite="$default_domain"
+        fi
+        
         echo -e "${GREEN}Using SNI: ${MAGENTA}$proxysite${NC}"
 
         echo -e "\n${YELLOW}Select ShadowTLS wildcard SNI mode:${NC}"
@@ -1407,57 +1827,79 @@ change_shadowtls_sni() {
     local current_sni=$(jq -r '.inbounds[] | select(.type == "shadowtls") | .handshake.server' /etc/sing-box/config.json)
     echo -e "${CYAN}Current SNI: $current_sni${NC}"
     
-    echo -e "\n${CYAN}Select new SNI:${NC}"
-    echo -e "1) p11.douyinpic.com (Douyin Image CDN)"
-    echo -e "2) mp.weixin.qq.com (WeChat)"
-    echo -e "3) coding.net"
-    echo -e "4) upyun.com (UpYun CDN)"
-    echo -e "5) sns-video-hw.xhscdn.com (XiaoHongShu Video)"
-    echo -e "6) sns-img-qc.xhscdn.com (XiaoHongShu Image)"
-    echo -e "7) sns-video-qn.xhscdn.com (XiaoHongShu Video)"
-    echo -e "8) p6-dy.byteimg.com (ByteDance CDN)"
-    echo -e "9) p9-dy.byteimg.com (ByteDance CDN)"
-    echo -e "10) feishu.cn (Feishu/Lark)"
-    echo -e "11) douyin.com"
-    echo -e "12) toutiao.com"
-    echo -e "13) v6-dy-y.ixigua.com"
-    echo -e "14) hls3-akm.douyucdn.cn (Douyu CDN)"
-    echo -e "15) publicassets.cdn-apple.com (Apple CDN)"
-    echo -e "16) weather-data.apple.com"
-    echo -e "17) gateway.icloud.com (Most Stable)"
-    echo -e "18) Custom domain"
+    # Perform TLS 1.3 validation
+    echo -e "\n${CYAN}Performing TLS 1.3 validation for SNI domains...${NC}"
+    validate_sni_domains
     
-    read -p "Enter your choice (1-18): " sni_choice
+    # Build dynamic SNI menu based on validated domains
+    echo -e "\n${CYAN}Select new SNI (TLS 1.3 verified domains only):${NC}"
     
-    case $sni_choice in
-        1) new_sni="p11.douyinpic.com" ;;
-        2) new_sni="mp.weixin.qq.com" ;;
-        3) new_sni="coding.net" ;;
-        4) new_sni="upyun.com" ;;
-        5) new_sni="sns-video-hw.xhscdn.com" ;;
-        6) new_sni="sns-img-qc.xhscdn.com" ;;
-        7) new_sni="sns-video-qn.xhscdn.com" ;;
-        8) new_sni="p6-dy.byteimg.com" ;;
-        9) new_sni="p9-dy.byteimg.com" ;;
-        10) new_sni="feishu.cn" ;;
-        11) new_sni="douyin.com" ;;
-        12) new_sni="toutiao.com" ;;
-        13) new_sni="v6-dy-y.ixigua.com" ;;
-        14) new_sni="hls3-akm.douyucdn.cn" ;;
-        15) new_sni="publicassets.cdn-apple.com" ;;
-        16) new_sni="weather-data.apple.com" ;;
-        17) new_sni="gateway.icloud.com" ;;
-        18) 
-            read -p "Enter custom domain (e.g., www.example.com): " new_sni
-            if [[ -z "$new_sni" ]]; then
-                new_sni="p11.douyinpic.com"
-            fi
-            ;;
-        *)
-            echo -e "${RED}Invalid choice.${NC}"
-            return 1
-            ;;
-    esac
+    # Define all domains with their info (TLS 1.3 verified)
+    declare -A all_sni_domains=(
+        ["p11.douyinpic.com"]="Douyin Image CDN"
+        ["mp.weixin.qq.com"]="WeChat"
+        ["coding.net"]="Coding.net"
+        ["upyun.com"]="UpYun CDN"
+        ["sns-video-hw.xhscdn.com"]="XiaoHongShu Video"
+        ["sns-video-qn.xhscdn.com"]="XiaoHongShu Video"
+        ["p6-dy.byteimg.com"]="ByteDance CDN"
+        ["feishu.cn"]="Feishu/Lark"
+        ["douyin.com"]="Douyin"
+        ["toutiao.com"]="Toutiao"
+        ["v6-dy-y.ixigua.com"]="Ixigua Video"
+        ["hls3-akm.douyucdn.cn"]="Douyu CDN"
+        ["publicassets.cdn-apple.com"]="Apple CDN"
+        ["weather-data.apple.com"]="Apple Weather"
+        ["gateway.icloud.com"]="iCloud Gateway - Most Stable"
+    )
+    
+    # Convert VALID_TLS13_DOMAINS to array
+    read -ra valid_domains_array <<< "$VALID_TLS13_DOMAINS"
+    
+    # Build menu
+    local menu_index=1
+    declare -A choice_to_domain=()
+    
+    for domain in "${valid_domains_array[@]}"; do
+        if [[ -n "$domain" ]]; then
+            echo -e "  ${CYAN}$menu_index) $domain (${all_sni_domains[$domain]}) ${GREEN}✓${NC}"
+            choice_to_domain[$menu_index]="$domain"
+            ((menu_index++))
+        fi
+    done
+    
+    echo -e "  ${CYAN}$menu_index) Custom domain${NC}"
+    
+    # Set default to first valid domain or fallback
+    local default_domain="${valid_domains_array[0]}"
+    if [[ -z "$default_domain" ]]; then
+        default_domain="p11.douyinpic.com"
+    fi
+    
+    read -p "$(echo -e "${YELLOW}Enter your choice [1-$menu_index] (Default: 1 - $default_domain): ${NC}")" sni_choice
+    
+    local new_sni=""
+    if [[ "$sni_choice" == "$menu_index" ]]; then
+        # Custom domain
+        read -p "$(echo -e "${YELLOW}Enter custom domain: ${NC}")" new_sni
+        if [[ -z "$new_sni" ]]; then
+            new_sni="$default_domain"
+        fi
+        # Verify custom domain
+        echo -e "${CYAN}Verifying custom domain TLS 1.3 support...${NC}"
+        if check_tls13_support "$new_sni"; then
+            echo -e "${GREEN}✓ Custom domain $new_sni supports TLS 1.3${NC}"
+        else
+            echo -e "${YELLOW}⚠ Warning: Custom domain $new_sni may not support TLS 1.3${NC}"
+        fi
+    elif [[ -n "${choice_to_domain[$sni_choice]}" ]]; then
+        new_sni="${choice_to_domain[$sni_choice]}"
+    else
+        # Invalid choice or empty, use default
+        new_sni="$default_domain"
+    fi
+    
+    echo -e "${GREEN}Selected SNI: ${MAGENTA}$new_sni${NC}"
     
     # Update configuration
     jq ".inbounds = [.inbounds[] | if .type == \"shadowtls\" then .handshake.server = \"$new_sni\" else . end]" /etc/sing-box/config.json > /tmp/sing-box-temp.json
@@ -1708,26 +2150,91 @@ view_config() {
 
 # Function to view service status
 check_status() {
-    echo -e "\n${BLUE}Sing-Box Service Status${NC}"
-    systemctl status sing-box
+    echo -e "\n${BLUE}Sing-Box 服务状态${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════${NC}"
+    
+    # 检查服务状态
+    if systemctl is-active --quiet sing-box; then
+        echo -e "${GREEN}✓ 服务运行状态: 正在运行${NC}"
+        
+        # 获取运行时间
+        local uptime=$(systemctl show sing-box --property=ActiveEnterTimestamp --value)
+        if [[ -n "$uptime" ]]; then
+            echo -e "${CYAN}启动时间: $uptime${NC}"
+        fi
+        
+        # 获取内存使用
+        local pid=$(systemctl show sing-box --property=MainPID --value)
+        if [[ -n "$pid" ]] && [[ "$pid" != "0" ]]; then
+            local mem_usage=$(ps -o rss= -p $pid 2>/dev/null | awk '{print $1/1024 " MB"}')
+            if [[ -n "$mem_usage" ]]; then
+                echo -e "${CYAN}内存使用: $mem_usage${NC}"
+            fi
+        fi
+    else
+        echo -e "${RED}✗ 服务运行状态: 未运行${NC}"
+    fi
+    
+    echo -e "${CYAN}═══════════════════════════════════════${NC}"
+    
+    echo -e "\n${CYAN}详细信息:${NC}"
+    systemctl status sing-box --no-pager
 }
 
 # Function to view logs
 view_logs() {
-    echo -e "\n${BLUE}Sing-Box Logs (Last 50 lines)${NC}"
-    journalctl -u sing-box -n 50 --no-pager
+    echo -e "\n${BLUE}Sing-Box 日志${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════${NC}"
+    
+    echo -e "${CYAN}选择日志显示方式:${NC}"
+    echo -e "  ${CYAN}1)${NC} 最近 50 行"
+    echo -e "  ${CYAN}2)${NC} 最近 100 行"
+    echo -e "  ${CYAN}3)${NC} 实时跟踪日志"
+    echo -e "  ${CYAN}4)${NC} 查看错误日志"
+    echo -ne "${YELLOW}请选择 [1-4] (默认: 1): ${NC}"
+    
+    read -r log_choice
+    log_choice=${log_choice:-1}
+    
+    case "$log_choice" in
+        1) journalctl -u sing-box -n 50 --no-pager ;;
+        2) journalctl -u sing-box -n 100 --no-pager ;;
+        3) 
+            echo -e "${YELLOW}按 Ctrl+C 退出实时日志${NC}"
+            journalctl -u sing-box -f
+            ;;
+        4) journalctl -u sing-box -p err -n 50 --no-pager ;;
+        *) journalctl -u sing-box -n 50 --no-pager ;;
+    esac
 }
 
 # Function to restart service
 restart_service() {
-    echo -e "\n${BLUE}Restarting Sing-Box Service${NC}"
-    systemctl restart sing-box
+    echo -e "\n${BLUE}重启 Sing-Box 服务${NC}"
     
-    if systemctl is-active --quiet sing-box; then
-        echo -e "${GREEN}Service restarted successfully!${NC}"
+    if confirm_action "确定要重启服务吗？"; then
+        echo -e "${CYAN}正在停止服务...${NC}"
+        systemctl stop sing-box
+        sleep 1
+        
+        echo -e "${CYAN}正在启动服务...${NC}"
+        systemctl start sing-box
+        sleep 2
+        
+        if systemctl is-active --quiet sing-box; then
+            log SUCCESS "服务重启成功"
+            echo -e "${GREEN}✓ 服务重启成功！${NC}"
+            
+            # 显示服务状态
+            echo -e "\n${CYAN}当前服务状态:${NC}"
+            systemctl status sing-box --no-pager | head -10
+        else
+            log ERROR "服务重启失败"
+            echo -e "${RED}✗ 服务重启失败${NC}"
+            echo -e "${YELLOW}查看日志: journalctl -u sing-box -e${NC}"
+        fi
     else
-        echo -e "${RED}Error: Service failed to restart.${NC}"
-        echo -e "${YELLOW}Check logs with: journalctl -u sing-box -e${NC}"
+        echo -e "${YELLOW}已取消重启${NC}"
     fi
 }
 
@@ -1843,24 +2350,40 @@ change_shadowsocks_password_only(){
 # Function to display menu
 show_menu() {
     clear
-    echo -e "${YELLOW}Sing-Box & ShadowTLS Multi-Deployment Script v3.1${NC}"
-    echo -e ""
-    echo -e "  ${CYAN}1) Install/Update Sing-Box (Multiple deployment modes)${NC}"
-    echo -e "  ${CYAN}2) Uninstall Sing-Box${NC}"
-    echo -e "  ${CYAN}3) View Node Information (Generated from current config)${NC}"
-    echo -e "  ${CYAN}4) View Service Status${NC}"
-    echo -e "  ${CYAN}5) View Service Logs${NC}"
-    echo -e "  ${CYAN}6) Restart Service${NC}"
-    echo -e "  ${CYAN}7) View Current Configuration (JSON format)${NC}"
-    echo -e "  ${CYAN}8) Port Settings (SS/STLS/UDP/Internal ports)${NC}"
-    echo -e "  ${CYAN}9) Password Settings (SS/STLS)${NC}"
-    echo -e "  ${CYAN}10) ShadowTLS Settings (SNI/Password)${NC}"
-    echo -e "  ${CYAN}11) Shadowsocks Settings (Encryption/UDP port)${NC}"
-    echo -e "  ${CYAN}12) DNS Settings (Strategy/Servers)${NC}"
-    echo -e ""
-    echo -e "  ${CYAN}0) Exit Script${NC}"
-    echo -e ""
-    echo -ne "${YELLOW}Please select an operation [0-12]: ${NC}"
+    echo -e "${BLUE}╔═════════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║${NC}  ${YELLOW}Sing-Box & ShadowTLS ${SCRIPT_VERSION}${NC}  ${BLUE}║${NC}"
+    echo -e "${BLUE}╚═════════════════════════════════════════════════╝${NC}\n"
+    
+    # 主要操作
+    echo -e "${GREEN} 主要操作${NC}"
+    echo -e "  ${CYAN}1)${NC} 安装/更新 Sing-Box"
+    echo -e "  ${CYAN}2)${NC} 卸载 Sing-Box"
+    echo -e "  ${CYAN}3)${NC} 查看节点信息\n"
+    
+    # 服务管理
+    echo -e "${GREEN} 服务管理${NC}"
+    echo -e "  ${CYAN}4)${NC} 服务状态"
+    echo -e "  ${CYAN}5)${NC} 查看日志"
+    echo -e "  ${CYAN}6)${NC} 重启服务\n"
+    
+    # 配置管理
+    echo -e "${GREEN} 配置管理${NC}"
+    echo -e "  ${CYAN}7)${NC} 查看当前配置"
+    echo -e "  ${CYAN}8)${NC} 端口设置"
+    echo -e "  ${CYAN}9)${NC} 密码设置"
+    echo -e "  ${CYAN}10)${NC} ShadowTLS 设置"
+    echo -e "  ${CYAN}11)${NC} Shadowsocks 设置"
+    echo -e "  ${CYAN}12)${NC} DNS 设置\n"
+    
+    # 系统工具
+    echo -e "${GREEN} 系统工具${NC}"
+    echo -e "  ${CYAN}13)${NC} 健康检查"
+    echo -e "  ${CYAN}14)${NC} 系统优化"
+    echo -e "  ${CYAN}15)${NC} 备份配置"
+    echo -e "  ${CYAN}16)${NC} 恢复配置\n"
+    
+    echo -e "  ${CYAN}0)${NC} 退出\n"
+    echo -ne "${YELLOW}请选择 [0-16]: ${NC}"
 }
 
 # Function to display port submenu
@@ -1994,16 +2517,29 @@ main() {
             12)
                 show_dns_menu
                 ;;
+            13)
+                health_check
+                ;;
+            14)
+                optimize_system
+                ;;
+            15)
+                backup_config
+                ;;
+            16)
+                restore_config
+                ;;
             0)
-                echo -e "${GREEN}Exiting...${NC}"
+                echo -e "${GREEN}退出中...${NC}"
+                log INFO "脚本正常退出"
                 exit 0
                 ;;
             *)
-                echo -e "${RED}Invalid choice. Please try again.${NC}"
+                echo -e "${RED}无效选择，请重试${NC}"
                 ;;
         esac
         
-        echo -e "\n${YELLOW}Press Enter to continue...${NC}"
+        echo -e "\n${YELLOW}按 Enter 键继续...${NC}"
         read
     done
 }
