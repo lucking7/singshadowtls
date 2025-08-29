@@ -2,4 +2,4 @@
 *.json
 
 # 忽略所有backup备份文件
-*.backup
+*.backup.DS_Store
