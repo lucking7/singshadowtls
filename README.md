@@ -1,10 +1,10 @@
 # SingShadowTLS 🎵🎵🎵
 
-一键部署ShadowTLS脚本工具
+一键部署 ShadowTLS 脚本工具
 
 ## 快速开始
 
-### 使用curl一键安装
+### 使用 curl 一键安装
 
 ```bash
 # 下载并运行安装脚本
@@ -23,6 +23,7 @@ chmod +x sb.sh
 ### 手动安装
 
 1. 克隆仓库：
+
    ```bash
    git clone https://github.com/jasperl/singshadowtls.git
    cd singshadowtls
@@ -38,12 +39,12 @@ chmod +x sb.sh
 
 > _If we don't trust you, this plan can't be established. So I trust you, and that's a major premise._
 
-本脚本提供ShadowTLS的自动化部署和配置功能，支持多种模式和优化选项。
+本脚本提供 ShadowTLS 的自动化部署和配置功能，支持多种模式和优化选项。
 
 ## 注意事项
 
-- 请确保在支持的Linux发行版上运行
-- 建议使用root权限执行脚本
+- 请确保在支持的 Linux 发行版上运行
+- 建议使用 root 权限执行脚本
 - 脚本会自动处理依赖安装和防火墙配置
 
 ## 许可证

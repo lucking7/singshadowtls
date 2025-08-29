@@ -33,6 +33,9 @@ has_ipv6=0
 primary_ip=""
 country_code=""
 
+# Global TLS verification variable
+VALID_TLS13_DOMAINS=""
+
 # 初始化日志目录
 init_logging() {
     if [[ ! -d "$LOG_DIR" ]]; then
@@ -523,6 +526,73 @@ get_ip_info() {
     echo -e "  ${CYAN}Primary IP for Geo-lookup: ${NC}${primary_ip}"
     echo -e "  ${CYAN}Location: ${NC}${city}, ${country} (${country_code})"
     echo -e "  ${CYAN}ISP: ${NC}${isp}"
+}
+
+# Function to check TLS 1.3 support for a domain
+check_tls13_support() {
+    local domain="$1"
+    if [[ -z "$domain" ]]; then
+        return 1
+    fi
+    
+    # Use curl to test TLS 1.3 support with timeout
+    local result=$(curl -s -m 10 --tlsv1.3 --tls-max 1.3 -I "https://$domain" 2>/dev/null | head -1)
+    if [[ -n "$result" ]] && echo "$result" | grep -q "HTTP"; then
+        return 0
+    fi
+    return 1
+}
+
+# Function to validate SNI domains and populate VALID_TLS13_DOMAINS
+validate_sni_domains() {
+    echo -e "${CYAN}正在验证 TLS 1.3 域名支持...${NC}"
+    
+    # Define all potential SNI domains
+    local domains=(
+        "p11.douyinpic.com"
+        "mp.weixin.qq.com"
+        "coding.net"
+        "upyun.com"
+        "sns-video-hw.xhscdn.com"
+        "sns-video-qn.xhscdn.com"
+        "p6-dy.byteimg.com"
+        "feishu.cn"
+        "douyin.com"
+        "toutiao.com"
+        "v6-dy-y.ixigua.com"
+        "hls3-akm.douyucdn.cn"
+        "publicassets.cdn-apple.com"
+        "weather-data.apple.com"
+        "gateway.icloud.com"
+    )
+    
+    # Reset the valid domains string
+    VALID_TLS13_DOMAINS=""
+    local valid_count=0
+    local total_count=${#domains[@]}
+    
+    for domain in "${domains[@]}"; do
+        echo -ne "${CYAN}检查 $domain...${NC} "
+        if check_tls13_support "$domain"; then
+            echo -e "${GREEN}✓${NC}"
+            if [[ -n "$VALID_TLS13_DOMAINS" ]]; then
+                VALID_TLS13_DOMAINS="$VALID_TLS13_DOMAINS $domain"
+            else
+                VALID_TLS13_DOMAINS="$domain"
+            fi
+            valid_count=$((valid_count + 1))
+        else
+            echo -e "${RED}✗${NC}"
+        fi
+    done
+    
+    echo -e "${GREEN}TLS 1.3 验证完成: $valid_count/$total_count 个域名可用${NC}"
+    
+    # Fallback if no domains are valid (network issues, etc.)
+    if [[ -z "$VALID_TLS13_DOMAINS" ]]; then
+        echo -e "${YELLOW}警告: 无法验证任何域名的 TLS 1.3 支持，使用默认域名${NC}"
+        VALID_TLS13_DOMAINS="p11.douyinpic.com gateway.icloud.com"
+    fi
 }
 
 # Function to output node information
@@ -2285,7 +2355,7 @@ change_ss_method() {
     fi
     
     # Update method and password for all Shadowsocks inbounds
-    jq "(.inbounds[] | select(.type == "shadowsocks") | .method) = \"$new_method\" | (.inbounds[] | select(.type == "shadowsocks") | .password) = \"$new_password\"" /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+    jq "(.inbounds[] | select(.type == \"shadowsocks\") | .method) = \"$new_method\" | (.inbounds[] | select(.type == \"shadowsocks\") | .password) = \"$new_password\"" /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
     if [[ $? -ne 0 ]]; then echo -e "${RED}Encryption method and password update failed.${NC}"; return 1; fi
 
     chown sing-box:sing-box /etc/sing-box/config.json
@@ -2330,7 +2400,7 @@ change_shadowsocks_password_only(){
         echo -e "${GREEN}Generated random Shadowsocks password.${NC}"
     fi
     
-    jq "(.inbounds[] | select(.type == "shadowsocks") | .password) = \"$shadowsocks_password\"" /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+    jq "(.inbounds[] | select(.type == \"shadowsocks\") | .password) = \"$shadowsocks_password\"" /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
     if [[ $? -ne 0 ]]; then echo -e "${RED}Shadowsocks password update failed.${NC}"; return 1; fi
         
     chown sing-box:sing-box /etc/sing-box/config.json
