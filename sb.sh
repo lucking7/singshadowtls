@@ -3010,6 +3010,7 @@ deploy_dns_unlock_server() {
     # 检测是否已有 DNS 解锁配置
     local has_unlock_dns=false
     local unlock_dns_server=""
+    local use_detected_dns=false
 
     if [[ -f /etc/sing-box/config.json ]]; then
         # 检查是否有流媒体 DNS 规则配置
@@ -3019,32 +3020,152 @@ deploy_dns_unlock_server() {
             unlock_dns_server=$(jq -r '.dns.rules[] | select(.rule_set and (.rule_set | contains(["geosite-netflix"]))) | .server' /etc/sing-box/config.json 2>/dev/null | head -1)
 
             if [[ -n "$unlock_dns_server" && "$unlock_dns_server" != "null" ]]; then
-                echo -e "\n${GREEN}✓ 检测到已配置的 DNS 解锁服务器: $unlock_dns_server${NC}"
-                echo -e "${YELLOW}可以使用此服务器作为上游 DNS（嵌套解锁）${NC}"
+                echo -e "\n${GREEN}✓ 检测到本机已配置的 DNS 解锁服务器: $unlock_dns_server${NC}"
+
+                # 获取 DNS 服务器详细信息用于显示
+                local dns_info=$(jq -r ".dns.servers[] | select(.tag == \"$unlock_dns_server\")" /etc/sing-box/config.json 2>/dev/null)
+                if [[ -n "$dns_info" && "$dns_info" != "null" ]]; then
+                    local dns_type=$(echo "$dns_info" | jq -r '.type')
+                    local dns_server=$(echo "$dns_info" | jq -r '.server')
+                    echo -e "${CYAN}  类型: $dns_type${NC}"
+                    echo -e "${CYAN}  服务器: $dns_server${NC}"
+                fi
+
+                echo -e "\n${YELLOW}是否使用此解锁 DNS 作为上游（嵌套解锁）?${NC}"
+                echo -e "${YELLOW}说明: 可以为其他服务器提供 DNS 解锁服务${NC}"
+                echo -e "${RED}注意: 此行为可能违反某些服务商的 TOS${NC}"
+                read -p "[Y/n]: " use_local_unlock
+                use_local_unlock=${use_local_unlock:-Y}
+
+                if [[ $use_local_unlock =~ ^[Yy]$ ]]; then
+                    use_detected_dns=true
+                fi
+            fi
+        fi
+    fi
+
+    # 如果用户不使用检测到的 DNS，或者没有检测到，询问是否手动输入
+    local use_manual_unlock=false
+    local manual_unlock_server=""
+    local manual_unlock_type=""
+    local manual_unlock_port=""
+    local manual_unlock_path=""
+
+    if [[ $use_detected_dns == false ]]; then
+        echo -e "\n${YELLOW}是否使用其他服务器的解锁 DNS 作为上游（嵌套解锁）?${NC}"
+        echo -e "${CYAN}例如: 使用另一台已配置解锁的服务器的 DNS${NC}"
+        read -p "[y/N]: " use_other_unlock
+        use_other_unlock=${use_other_unlock:-N}
+
+        if [[ $use_other_unlock =~ ^[Yy]$ ]]; then
+            echo -e "\n${CYAN}配置上游解锁 DNS 服务器${NC}"
+
+            # 输入服务器地址
+            while true; do
+                read -p "请输入解锁 DNS 服务器地址 (IP 或域名): " manual_unlock_server
+
+                if [[ -z "$manual_unlock_server" ]]; then
+                    echo -e "${RED}错误: 服务器地址不能为空${NC}"
+                    continue
+                fi
+
+                # 验证 IP 或域名格式
+                if [[ $manual_unlock_server =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ $manual_unlock_server =~ ^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$ ]]; then
+                    break
+                else
+                    echo -e "${RED}错误: 无效的 IP 地址或域名格式${NC}"
+                fi
+            done
+
+            # 选择协议类型
+            echo -e "\n${YELLOW}选择 DNS 协议类型:${NC}"
+            echo -e "  ${CYAN}1)${NC} UDP (传统 DNS, 端口 53)"
+            echo -e "  ${CYAN}2)${NC} TCP (传统 DNS over TCP, 端口 53)"
+            echo -e "  ${CYAN}3)${NC} DoH (DNS-over-HTTPS, 端口 443) ${GREEN}推荐${NC}"
+            echo -e "  ${CYAN}4)${NC} DoT (DNS-over-TLS, 端口 853)"
+            echo -e "  ${CYAN}5)${NC} DoQ (DNS-over-QUIC, 端口 853)"
+            echo -e "  ${CYAN}6)${NC} DoH3 (DNS-over-HTTP/3, 端口 443)\n"
+
+            read -p "请选择 [1-6, 默认: 3]: " dns_protocol
+            dns_protocol=${dns_protocol:-3}
+
+            case $dns_protocol in
+                1)
+                    manual_unlock_type="udp"
+                    manual_unlock_port=53
+                    ;;
+                2)
+                    manual_unlock_type="tcp"
+                    manual_unlock_port=53
+                    ;;
+                3)
+                    manual_unlock_type="https"
+                    manual_unlock_port=443
+                    read -p "请输入 DoH 路径 [默认: /dns-query]: " manual_unlock_path
+                    manual_unlock_path=${manual_unlock_path:-/dns-query}
+                    ;;
+                4)
+                    manual_unlock_type="tls"
+                    manual_unlock_port=853
+                    ;;
+                5)
+                    manual_unlock_type="quic"
+                    manual_unlock_port=853
+                    ;;
+                6)
+                    manual_unlock_type="http3"
+                    manual_unlock_port=443
+                    read -p "请输入 DoH3 路径 [默认: /dns-query]: " manual_unlock_path
+                    manual_unlock_path=${manual_unlock_path:-/dns-query}
+                    ;;
+                *)
+                    manual_unlock_type="https"
+                    manual_unlock_port=443
+                    manual_unlock_path="/dns-query"
+                    ;;
+            esac
+
+            # 自定义端口
+            read -p "DNS 端口 [默认: $manual_unlock_port]: " custom_port
+            manual_unlock_port=${custom_port:-$manual_unlock_port}
+
+            # 显示配置摘要
+            echo -e "\n${CYAN}上游解锁 DNS 配置摘要:${NC}"
+            echo -e "  服务器: ${GREEN}$manual_unlock_server${NC}"
+            echo -e "  类型: ${GREEN}$manual_unlock_type${NC}"
+            echo -e "  端口: ${GREEN}$manual_unlock_port${NC}"
+            if [[ -n "$manual_unlock_path" ]]; then
+                echo -e "  路径: ${GREEN}$manual_unlock_path${NC}"
+            fi
+
+            read -p "确认配置? [Y/n]: " confirm_manual
+            confirm_manual=${confirm_manual:-Y}
+
+            if [[ $confirm_manual =~ ^[Yy]$ ]]; then
+                use_manual_unlock=true
+                echo -e "${GREEN}✓ 上游解锁 DNS 配置完成${NC}"
+            else
+                echo -e "${YELLOW}已取消手动配置${NC}"
             fi
         fi
     fi
 
     # 选择上游 DNS 服务器
-    echo -e "\n${YELLOW}选择上游 DNS 服务器 (可多选，用空格分隔)${NC}"
+    echo -e "\n${YELLOW}选择公共上游 DNS 服务器 (可多选，用空格分隔)${NC}"
 
-    if [[ $has_unlock_dns == true ]]; then
-        echo -e "  ${CYAN}0)${NC} 使用已配置的解锁 DNS ($unlock_dns_server) ${GREEN}[推荐用于嵌套解锁]${NC}"
+    if [[ $use_detected_dns == true ]] || [[ $use_manual_unlock == true ]]; then
+        echo -e "${GREEN}已配置嵌套解锁，以下公共 DNS 将作为备用${NC}"
     fi
 
     echo -e "  ${CYAN}1)${NC} Cloudflare DNS (1.1.1.1)"
     echo -e "  ${CYAN}2)${NC} Google DNS (8.8.8.8)"
     echo -e "  ${CYAN}3)${NC} AdGuard DNS (94.140.14.14)"
     echo -e "  ${CYAN}4)${NC} Quad9 DNS (9.9.9.9)"
-    echo -e "  ${CYAN}5)${NC} 全部公共 DNS\n"
+    echo -e "  ${CYAN}5)${NC} 全部公共 DNS"
+    echo -e "  ${CYAN}0)${NC} 不使用公共 DNS（仅使用嵌套解锁）\n"
 
-    if [[ $has_unlock_dns == true ]]; then
-        read -p "请选择 [0-5, 默认: 0]: " upstream_choice
-        upstream_choice=${upstream_choice:-0}
-    else
-        read -p "请选择 [1-5, 默认: 5]: " upstream_choice
-        upstream_choice=${upstream_choice:-5}
-    fi
+    read -p "请选择 [0-5, 默认: 1]: " upstream_choice
+    upstream_choice=${upstream_choice:-1}
 
     # 是否启用广告拦截
     echo -e "\n${YELLOW}是否启用广告域名拦截?${NC}"
@@ -3083,8 +3204,8 @@ EOF
     # 首先添加真实的上游 DNS 服务器（FakeIP 不能作为第一个）
     local default_dns_added=false
 
-    # 如果选择使用已配置的解锁 DNS
-    if [[ $upstream_choice == 0 ]] && [[ $has_unlock_dns == true ]]; then
+    # 如果使用检测到的本机解锁 DNS
+    if [[ $use_detected_dns == true ]] && [[ $has_unlock_dns == true ]]; then
         # 获取已配置的 DNS 服务器详细信息
         local unlock_dns_info=$(jq -r ".dns.servers[] | select(.tag == \"$unlock_dns_server\")" /etc/sing-box/config.json 2>/dev/null)
 
@@ -3123,9 +3244,34 @@ EOF
         fi
     fi
 
-    # 添加公共 DNS 服务器
-    if [[ $upstream_choice == 5 ]] || [[ $upstream_choice =~ 1 ]]; then
+    # 如果使用手动输入的解锁 DNS
+    if [[ $use_manual_unlock == true ]]; then
         cat >> /etc/sing-box/config.json << EOF
+      {
+        "tag": "dns_unlock_upstream",
+        "type": "$manual_unlock_type",
+        "server": "$manual_unlock_server",
+        "server_port": $manual_unlock_port
+EOF
+
+        if [[ -n "$manual_unlock_path" ]]; then
+            cat >> /etc/sing-box/config.json << EOF
+,
+        "path": "$manual_unlock_path"
+EOF
+        fi
+
+        cat >> /etc/sing-box/config.json << EOF
+
+      },
+EOF
+        default_dns_added=true
+    fi
+
+    # 添加公共 DNS 服务器（如果选择了）
+    if [[ $upstream_choice != 0 ]]; then
+        if [[ $upstream_choice == 5 ]] || [[ $upstream_choice =~ 1 ]]; then
+            cat >> /etc/sing-box/config.json << EOF
       {
         "tag": "dns_cloudflare",
         "type": "https",
@@ -3134,11 +3280,11 @@ EOF
         "path": "/dns-query"
       },
 EOF
-        default_dns_added=true
-    fi
+            default_dns_added=true
+        fi
 
-    if [[ $upstream_choice == 5 ]] || [[ $upstream_choice =~ 2 ]]; then
-        cat >> /etc/sing-box/config.json << EOF
+        if [[ $upstream_choice == 5 ]] || [[ $upstream_choice =~ 2 ]]; then
+            cat >> /etc/sing-box/config.json << EOF
       {
         "tag": "dns_google",
         "type": "https",
@@ -3147,11 +3293,11 @@ EOF
         "path": "/dns-query"
       },
 EOF
-        [[ $default_dns_added == false ]] && default_dns_added=true
-    fi
+            [[ $default_dns_added == false ]] && default_dns_added=true
+        fi
 
-    if [[ $upstream_choice == 5 ]] || [[ $upstream_choice =~ 3 ]]; then
-        cat >> /etc/sing-box/config.json << EOF
+        if [[ $upstream_choice == 5 ]] || [[ $upstream_choice =~ 3 ]]; then
+            cat >> /etc/sing-box/config.json << EOF
       {
         "tag": "dns_adguard",
         "type": "https",
@@ -3160,11 +3306,11 @@ EOF
         "path": "/dns-query"
       },
 EOF
-        [[ $default_dns_added == false ]] && default_dns_added=true
-    fi
+            [[ $default_dns_added == false ]] && default_dns_added=true
+        fi
 
-    if [[ $upstream_choice == 5 ]] || [[ $upstream_choice =~ 4 ]]; then
-        cat >> /etc/sing-box/config.json << EOF
+        if [[ $upstream_choice == 5 ]] || [[ $upstream_choice =~ 4 ]]; then
+            cat >> /etc/sing-box/config.json << EOF
       {
         "tag": "dns_quad9",
         "type": "https",
@@ -3173,7 +3319,8 @@ EOF
         "path": "/dns-query"
       },
 EOF
-        [[ $default_dns_added == false ]] && default_dns_added=true
+            [[ $default_dns_added == false ]] && default_dns_added=true
+        fi
     fi
 
     # 如果没有添加任何上游 DNS，添加 Cloudflare 作为默认
@@ -3241,7 +3388,7 @@ EOF
 
     # 确定默认 DNS 服务器
     local default_server="dns_cloudflare"
-    if [[ $upstream_choice == 0 ]] && [[ $has_unlock_dns == true ]]; then
+    if [[ $use_detected_dns == true ]] || [[ $use_manual_unlock == true ]]; then
         default_server="dns_unlock_upstream"
     elif [[ $upstream_choice == 2 ]]; then
         default_server="dns_google"
@@ -3249,6 +3396,9 @@ EOF
         default_server="dns_adguard"
     elif [[ $upstream_choice == 4 ]]; then
         default_server="dns_quad9"
+    elif [[ $upstream_choice == 0 ]]; then
+        # 仅使用嵌套解锁，没有公共 DNS
+        default_server="dns_unlock_upstream"
     fi
 
     # 添加流媒体 DNS 规则
@@ -3403,17 +3553,29 @@ EOF
     echo -e "\n${CYAN}配置摘要:${NC}"
     echo -e "  监听地址: ${GREEN}$listen_addr:$listen_port${NC}"
 
-    if [[ $upstream_choice == 0 ]] && [[ $has_unlock_dns == true ]]; then
-        echo -e "  上游 DNS: ${GREEN}已配置的解锁 DNS ($unlock_dns_server)${NC} ${YELLOW}[嵌套解锁]${NC}"
+    # 显示上游 DNS 配置
+    if [[ $use_detected_dns == true ]]; then
+        echo -e "  上游 DNS: ${GREEN}本机解锁 DNS ($unlock_dns_server)${NC} ${YELLOW}[嵌套解锁]${NC}"
+    elif [[ $use_manual_unlock == true ]]; then
+        echo -e "  上游 DNS: ${GREEN}手动配置的解锁 DNS ($manual_unlock_server)${NC} ${YELLOW}[嵌套解锁]${NC}"
+    fi
+
+    # 显示公共 DNS 配置
+    if [[ $upstream_choice == 0 ]]; then
+        if [[ $use_detected_dns == true ]] || [[ $use_manual_unlock == true ]]; then
+            echo -e "  公共 DNS: ${YELLOW}未配置（仅使用嵌套解锁）${NC}"
+        else
+            echo -e "  公共 DNS: ${GREEN}Cloudflare (默认)${NC}"
+        fi
     elif [[ $upstream_choice == 5 ]]; then
-        echo -e "  上游 DNS: ${GREEN}全部公共 DNS (Cloudflare, Google, AdGuard, Quad9)${NC}"
+        echo -e "  公共 DNS: ${GREEN}全部 (Cloudflare, Google, AdGuard, Quad9)${NC}"
     else
         local dns_names=""
         [[ $upstream_choice =~ 1 ]] && dns_names="Cloudflare"
-        [[ $upstream_choice =~ 2 ]] && dns_names="$dns_names Google"
-        [[ $upstream_choice =~ 3 ]] && dns_names="$dns_names AdGuard"
-        [[ $upstream_choice =~ 4 ]] && dns_names="$dns_names Quad9"
-        echo -e "  上游 DNS: ${GREEN}$dns_names${NC}"
+        [[ $upstream_choice =~ 2 ]] && dns_names="${dns_names:+$dns_names, }Google"
+        [[ $upstream_choice =~ 3 ]] && dns_names="${dns_names:+$dns_names, }AdGuard"
+        [[ $upstream_choice =~ 4 ]] && dns_names="${dns_names:+$dns_names, }Quad9"
+        echo -e "  公共 DNS: ${GREEN}$dns_names${NC}"
     fi
 
     echo -e "  FakeIP: $([ "$enable_fakeip" = "Y" ] && echo "${GREEN}已启用${NC}" || echo "${YELLOW}未启用${NC}")"
@@ -3454,17 +3616,29 @@ EOF
         echo -e "${CYAN}DNS 端口:${NC} $listen_port"
         echo -e "${CYAN}监听地址:${NC} $listen_addr:$listen_port"
 
-        if [[ $upstream_choice == 0 ]] && [[ $has_unlock_dns == true ]]; then
-            echo -e "${CYAN}上游 DNS:${NC} 已配置的解锁 DNS ${YELLOW}(嵌套解锁)${NC}"
+        # 显示上游 DNS 信息
+        if [[ $use_detected_dns == true ]]; then
+            echo -e "${CYAN}上游 DNS:${NC} 本机解锁 DNS ${YELLOW}(嵌套解锁)${NC}"
+        elif [[ $use_manual_unlock == true ]]; then
+            echo -e "${CYAN}上游 DNS:${NC} $manual_unlock_server ${YELLOW}(嵌套解锁)${NC}"
+        fi
+
+        # 显示公共 DNS 信息
+        if [[ $upstream_choice == 0 ]]; then
+            if [[ $use_detected_dns == false ]] && [[ $use_manual_unlock == false ]]; then
+                echo -e "${CYAN}公共 DNS:${NC} Cloudflare (默认)"
+            else
+                echo -e "${CYAN}公共 DNS:${NC} 未配置"
+            fi
         elif [[ $upstream_choice == 5 ]]; then
-            echo -e "${CYAN}上游 DNS:${NC} 全部公共 DNS"
+            echo -e "${CYAN}公共 DNS:${NC} 全部"
         else
             local dns_list=""
             [[ $upstream_choice =~ 1 ]] && dns_list="Cloudflare"
-            [[ $upstream_choice =~ 2 ]] && dns_list="$dns_list Google"
-            [[ $upstream_choice =~ 3 ]] && dns_list="$dns_list AdGuard"
-            [[ $upstream_choice =~ 4 ]] && dns_list="$dns_list Quad9"
-            echo -e "${CYAN}上游 DNS:${NC} $dns_list"
+            [[ $upstream_choice =~ 2 ]] && dns_list="${dns_list:+$dns_list, }Google"
+            [[ $upstream_choice =~ 3 ]] && dns_list="${dns_list:+$dns_list, }AdGuard"
+            [[ $upstream_choice =~ 4 ]] && dns_list="${dns_list:+$dns_list, }Quad9"
+            echo -e "${CYAN}公共 DNS:${NC} $dns_list"
         fi
 
         echo -e "${CYAN}FakeIP:${NC} $([ "$enable_fakeip" = "Y" ] && echo "已启用" || echo "未启用")"
@@ -3472,10 +3646,15 @@ EOF
         echo -e "\n${YELLOW}客户端配置:${NC}"
         echo -e "  将设备的 DNS 设置为: ${GREEN}$server_ip${NC}"
 
-        if [[ $upstream_choice == 0 ]] && [[ $has_unlock_dns == true ]]; then
+        # 显示嵌套解锁说明
+        if [[ $use_detected_dns == true ]] || [[ $use_manual_unlock == true ]]; then
             echo -e "\n${YELLOW}⚠ 嵌套解锁说明:${NC}"
-            echo -e "  此服务器使用已配置的解锁 DNS 作为上游"
-            echo -e "  可以为其他服务器提供 DNS 解锁服务"
+            if [[ $use_detected_dns == true ]]; then
+                echo -e "  此服务器使用本机已配置的解锁 DNS 作为上游"
+            else
+                echo -e "  此服务器使用 $manual_unlock_server 的解锁 DNS 作为上游"
+            fi
+            echo -e "  可以为其他服务器/客户端提供 DNS 解锁服务"
             echo -e "  ${RED}注意: 此行为可能违反某些服务商的 TOS${NC}"
         fi
 
