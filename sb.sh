@@ -3007,16 +3007,44 @@ deploy_dns_unlock_server() {
     read -p "监听端口 [默认: 53]: " listen_port
     listen_port=${listen_port:-53}
 
+    # 检测是否已有 DNS 解锁配置
+    local has_unlock_dns=false
+    local unlock_dns_server=""
+
+    if [[ -f /etc/sing-box/config.json ]]; then
+        # 检查是否有流媒体 DNS 规则配置
+        if jq -e '.dns.rules[] | select(.rule_set and (.rule_set | contains(["geosite-netflix"])))' /etc/sing-box/config.json >/dev/null 2>&1; then
+            has_unlock_dns=true
+            # 获取 Netflix 使用的 DNS 服务器
+            unlock_dns_server=$(jq -r '.dns.rules[] | select(.rule_set and (.rule_set | contains(["geosite-netflix"]))) | .server' /etc/sing-box/config.json 2>/dev/null | head -1)
+
+            if [[ -n "$unlock_dns_server" && "$unlock_dns_server" != "null" ]]; then
+                echo -e "\n${GREEN}✓ 检测到已配置的 DNS 解锁服务器: $unlock_dns_server${NC}"
+                echo -e "${YELLOW}可以使用此服务器作为上游 DNS（嵌套解锁）${NC}"
+            fi
+        fi
+    fi
+
     # 选择上游 DNS 服务器
     echo -e "\n${YELLOW}选择上游 DNS 服务器 (可多选，用空格分隔)${NC}"
+
+    if [[ $has_unlock_dns == true ]]; then
+        echo -e "  ${CYAN}0)${NC} 使用已配置的解锁 DNS ($unlock_dns_server) ${GREEN}[推荐用于嵌套解锁]${NC}"
+    fi
+
     echo -e "  ${CYAN}1)${NC} Cloudflare DNS (1.1.1.1)"
     echo -e "  ${CYAN}2)${NC} Google DNS (8.8.8.8)"
     echo -e "  ${CYAN}3)${NC} AdGuard DNS (94.140.14.14)"
     echo -e "  ${CYAN}4)${NC} Quad9 DNS (9.9.9.9)"
-    echo -e "  ${CYAN}5)${NC} 全部\n"
+    echo -e "  ${CYAN}5)${NC} 全部公共 DNS\n"
 
-    read -p "请选择 [1-5, 默认: 5]: " upstream_choice
-    upstream_choice=${upstream_choice:-5}
+    if [[ $has_unlock_dns == true ]]; then
+        read -p "请选择 [0-5, 默认: 0]: " upstream_choice
+        upstream_choice=${upstream_choice:-0}
+    else
+        read -p "请选择 [1-5, 默认: 5]: " upstream_choice
+        upstream_choice=${upstream_choice:-5}
+    fi
 
     # 是否启用广告拦截
     echo -e "\n${YELLOW}是否启用广告域名拦截?${NC}"
@@ -3052,19 +3080,50 @@ deploy_dns_unlock_server() {
     "servers": [
 EOF
 
-    # 添加 FakeIP 服务器
-    if [[ $enable_fakeip =~ ^[Yy]$ ]]; then
-        cat >> /etc/sing-box/config.json << EOF
+    # 首先添加真实的上游 DNS 服务器（FakeIP 不能作为第一个）
+    local default_dns_added=false
+
+    # 如果选择使用已配置的解锁 DNS
+    if [[ $upstream_choice == 0 ]] && [[ $has_unlock_dns == true ]]; then
+        # 获取已配置的 DNS 服务器详细信息
+        local unlock_dns_info=$(jq -r ".dns.servers[] | select(.tag == \"$unlock_dns_server\")" /etc/sing-box/config.json 2>/dev/null)
+
+        if [[ -n "$unlock_dns_info" && "$unlock_dns_info" != "null" ]]; then
+            local dns_type=$(echo "$unlock_dns_info" | jq -r '.type')
+            local dns_server=$(echo "$unlock_dns_info" | jq -r '.server')
+            local dns_port=$(echo "$unlock_dns_info" | jq -r '.server_port // empty')
+            local dns_path=$(echo "$unlock_dns_info" | jq -r '.path // empty')
+
+            cat >> /etc/sing-box/config.json << EOF
       {
-        "tag": "dns_fakeip",
-        "type": "fakeip",
-        "inet4_range": "198.18.0.0/15",
-        "inet6_range": "fc00::/18"
+        "tag": "dns_unlock_upstream",
+        "type": "$dns_type",
+        "server": "$dns_server"
+EOF
+
+            if [[ -n "$dns_port" ]]; then
+                cat >> /etc/sing-box/config.json << EOF
+,
+        "server_port": $dns_port
+EOF
+            fi
+
+            if [[ -n "$dns_path" ]]; then
+                cat >> /etc/sing-box/config.json << EOF
+,
+        "path": "$dns_path"
+EOF
+            fi
+
+            cat >> /etc/sing-box/config.json << EOF
+
       },
 EOF
+            default_dns_added=true
+        fi
     fi
 
-    # 添加上游 DNS 服务器
+    # 添加公共 DNS 服务器
     if [[ $upstream_choice == 5 ]] || [[ $upstream_choice =~ 1 ]]; then
         cat >> /etc/sing-box/config.json << EOF
       {
@@ -3075,6 +3134,7 @@ EOF
         "path": "/dns-query"
       },
 EOF
+        default_dns_added=true
     fi
 
     if [[ $upstream_choice == 5 ]] || [[ $upstream_choice =~ 2 ]]; then
@@ -3087,6 +3147,7 @@ EOF
         "path": "/dns-query"
       },
 EOF
+        [[ $default_dns_added == false ]] && default_dns_added=true
     fi
 
     if [[ $upstream_choice == 5 ]] || [[ $upstream_choice =~ 3 ]]; then
@@ -3099,6 +3160,7 @@ EOF
         "path": "/dns-query"
       },
 EOF
+        [[ $default_dns_added == false ]] && default_dns_added=true
     fi
 
     if [[ $upstream_choice == 5 ]] || [[ $upstream_choice =~ 4 ]]; then
@@ -3109,6 +3171,32 @@ EOF
         "server": "9.9.9.9",
         "server_port": 443,
         "path": "/dns-query"
+      },
+EOF
+        [[ $default_dns_added == false ]] && default_dns_added=true
+    fi
+
+    # 如果没有添加任何上游 DNS，添加 Cloudflare 作为默认
+    if [[ $default_dns_added == false ]]; then
+        cat >> /etc/sing-box/config.json << EOF
+      {
+        "tag": "dns_cloudflare",
+        "type": "https",
+        "server": "1.1.1.1",
+        "server_port": 443,
+        "path": "/dns-query"
+      },
+EOF
+    fi
+
+    # 现在添加 FakeIP 服务器（在真实 DNS 之后）
+    if [[ $enable_fakeip =~ ^[Yy]$ ]]; then
+        cat >> /etc/sing-box/config.json << EOF
+      {
+        "tag": "dns_fakeip",
+        "type": "fakeip",
+        "inet4_range": "198.18.0.0/15",
+        "inet6_range": "fc00::/18"
       },
 EOF
     fi
@@ -3151,31 +3239,43 @@ EOF
 EOF
     fi
 
+    # 确定默认 DNS 服务器
+    local default_server="dns_cloudflare"
+    if [[ $upstream_choice == 0 ]] && [[ $has_unlock_dns == true ]]; then
+        default_server="dns_unlock_upstream"
+    elif [[ $upstream_choice == 2 ]]; then
+        default_server="dns_google"
+    elif [[ $upstream_choice == 3 ]]; then
+        default_server="dns_adguard"
+    elif [[ $upstream_choice == 4 ]]; then
+        default_server="dns_quad9"
+    fi
+
     # 添加流媒体 DNS 规则
     cat >> /etc/sing-box/config.json << EOF
       {
         "rule_set": ["geosite-netflix"],
-        "server": "dns_cloudflare",
+        "server": "$default_server",
         "strategy": "ipv6_only"
       },
       {
         "rule_set": ["geosite-disney"],
-        "server": "dns_cloudflare",
+        "server": "$default_server",
         "strategy": "ipv6_only"
       },
       {
         "rule_set": ["geosite-spotify"],
-        "server": "dns_cloudflare",
+        "server": "$default_server",
         "strategy": "prefer_ipv4"
       },
       {
         "rule_set": ["geosite-youtube"],
-        "server": "dns_google",
+        "server": "$default_server",
         "strategy": "prefer_ipv6"
       },
       {
         "rule_set": ["geosite-category-media"],
-        "server": "dns_cloudflare",
+        "server": "$default_server",
         "strategy": "ipv6_only"
       },
       {
@@ -3184,7 +3284,7 @@ EOF
         "strategy": "prefer_ipv4"
       },
       {
-        "server": "dns_google",
+        "server": "$default_server",
         "strategy": "prefer_ipv4"
       }
     ]
@@ -3299,12 +3399,38 @@ EOF
 
     echo -e "${GREEN}✓ 配置文件已生成${NC}"
 
+    # 显示配置摘要
+    echo -e "\n${CYAN}配置摘要:${NC}"
+    echo -e "  监听地址: ${GREEN}$listen_addr:$listen_port${NC}"
+
+    if [[ $upstream_choice == 0 ]] && [[ $has_unlock_dns == true ]]; then
+        echo -e "  上游 DNS: ${GREEN}已配置的解锁 DNS ($unlock_dns_server)${NC} ${YELLOW}[嵌套解锁]${NC}"
+    elif [[ $upstream_choice == 5 ]]; then
+        echo -e "  上游 DNS: ${GREEN}全部公共 DNS (Cloudflare, Google, AdGuard, Quad9)${NC}"
+    else
+        local dns_names=""
+        [[ $upstream_choice =~ 1 ]] && dns_names="Cloudflare"
+        [[ $upstream_choice =~ 2 ]] && dns_names="$dns_names Google"
+        [[ $upstream_choice =~ 3 ]] && dns_names="$dns_names AdGuard"
+        [[ $upstream_choice =~ 4 ]] && dns_names="$dns_names Quad9"
+        echo -e "  上游 DNS: ${GREEN}$dns_names${NC}"
+    fi
+
+    echo -e "  FakeIP: $([ "$enable_fakeip" = "Y" ] && echo "${GREEN}已启用${NC}" || echo "${YELLOW}未启用${NC}")"
+    echo -e "  广告拦截: $([ "$enable_adblock" = "Y" ] && echo "${GREEN}已启用${NC}" || echo "${YELLOW}未启用${NC}")"
+
     # 验证配置
     echo -e "\n${CYAN}验证配置文件...${NC}"
-    if sing-box check -c /etc/sing-box/config.json; then
+    if sing-box check -c /etc/sing-box/config.json 2>&1 | tee /tmp/sing-box-check.log; then
         echo -e "${GREEN}✓ 配置验证通过${NC}"
     else
         echo -e "${RED}✗ 配置验证失败${NC}"
+        echo -e "\n${YELLOW}错误详情:${NC}"
+        cat /tmp/sing-box-check.log
+        echo -e "\n${YELLOW}提示:${NC}"
+        echo -e "  - 如果提示 'default server cannot be fakeip'，说明 FakeIP 配置有问题"
+        echo -e "  - 配置文件已保存到: /etc/sing-box/config.json"
+        echo -e "  - 可以手动检查配置: ${CYAN}jq . /etc/sing-box/config.json${NC}"
         return 1
     fi
 
@@ -3327,10 +3453,32 @@ EOF
         echo -e "${CYAN}服务器 IP:${NC} $server_ip"
         echo -e "${CYAN}DNS 端口:${NC} $listen_port"
         echo -e "${CYAN}监听地址:${NC} $listen_addr:$listen_port"
+
+        if [[ $upstream_choice == 0 ]] && [[ $has_unlock_dns == true ]]; then
+            echo -e "${CYAN}上游 DNS:${NC} 已配置的解锁 DNS ${YELLOW}(嵌套解锁)${NC}"
+        elif [[ $upstream_choice == 5 ]]; then
+            echo -e "${CYAN}上游 DNS:${NC} 全部公共 DNS"
+        else
+            local dns_list=""
+            [[ $upstream_choice =~ 1 ]] && dns_list="Cloudflare"
+            [[ $upstream_choice =~ 2 ]] && dns_list="$dns_list Google"
+            [[ $upstream_choice =~ 3 ]] && dns_list="$dns_list AdGuard"
+            [[ $upstream_choice =~ 4 ]] && dns_list="$dns_list Quad9"
+            echo -e "${CYAN}上游 DNS:${NC} $dns_list"
+        fi
+
         echo -e "${CYAN}FakeIP:${NC} $([ "$enable_fakeip" = "Y" ] && echo "已启用" || echo "未启用")"
         echo -e "${CYAN}广告拦截:${NC} $([ "$enable_adblock" = "Y" ] && echo "已启用" || echo "未启用")"
         echo -e "\n${YELLOW}客户端配置:${NC}"
         echo -e "  将设备的 DNS 设置为: ${GREEN}$server_ip${NC}"
+
+        if [[ $upstream_choice == 0 ]] && [[ $has_unlock_dns == true ]]; then
+            echo -e "\n${YELLOW}⚠ 嵌套解锁说明:${NC}"
+            echo -e "  此服务器使用已配置的解锁 DNS 作为上游"
+            echo -e "  可以为其他服务器提供 DNS 解锁服务"
+            echo -e "  ${RED}注意: 此行为可能违反某些服务商的 TOS${NC}"
+        fi
+
         echo -e "\n${YELLOW}测试命令:${NC}"
         echo -e "  ${CYAN}nslookup netflix.com $server_ip${NC}"
         echo -e "  ${CYAN}dig @$server_ip netflix.com${NC}\n"

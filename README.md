@@ -69,6 +69,8 @@ chmod +x sb.sh
 - ✅ **不代理流量** - 极低带宽消耗，客户端直连
 - ✅ **多协议支持** - DoH、DoT、DoQ、DoH3 等加密协议
 - ✅ **广告拦截** - 可选的广告域名拦截功能
+- ✅ **FakeIP 加速** - 显著提升 DNS 解析速度（已修复配置错误）⭐
+- ✅ **嵌套解锁支持** - 自动检测并使用已配置的解锁 DNS 作为上游 ⭐
 - ✅ **客户端配置指南** - 自动生成各平台配置说明
 - ✅ **性能优秀** - 1 核 1GB 可支持 100+客户端
 
@@ -92,11 +94,7 @@ chmod +x sb.sh
 
 ### 📖 详细文档
 
-- **[STREAMING_UNLOCK.md](STREAMING_UNLOCK.md)** - 流媒体解锁完整指南
-- **[DNS_ROUTING_GUIDE.md](DNS_ROUTING_GUIDE.md)** - DNS 分流配置指南 🆕
-- **[DNS_UNLOCK_ADVANCED_GUIDE.md](DNS_UNLOCK_ADVANCED_GUIDE.md)** - DNS 解锁高级指南 🆕
-- **[CUSTOM_DNS_GUIDE.md](CUSTOM_DNS_GUIDE.md)** - 自定义 DNS 服务器配置指南 ⭐
-- **[QUICK_START_UNLOCK.md](QUICK_START_UNLOCK.md)** - 快速开始指南
+- **[DNS_UNLOCK_SERVER_GUIDE.md](DNS_UNLOCK_SERVER_GUIDE.md)** - 纯 DNS 解锁服务器部署指南 ⭐
 
 ### 🚀 快速使用
 
@@ -133,6 +131,18 @@ bash sb.sh
 bash sb.sh
 # 选择: 15 → 1 (部署 DNS 解锁服务器)
 # 配置完成后，客户端设置 DNS 为服务器 IP 即可
+# 如果检测到已配置的解锁 DNS，可选择使用（嵌套解锁）
+```
+
+#### 嵌套解锁（使用已配置的解锁 DNS）⭐
+
+```bash
+# 场景：服务器 A 已配置流媒体解锁，在服务器 B 上部署 DNS 服务器
+bash sb.sh
+# 选择: 15 → 1
+# 脚本会自动检测: ✓ 检测到已配置的 DNS 解锁服务器
+# 上游 DNS: 0 (使用已配置的解锁 DNS) ← 选择这个
+# 客户端将 DNS 设置为服务器 B 的 IP
 ```
 
 #### 测试 DNS 解锁
