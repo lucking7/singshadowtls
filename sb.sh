@@ -1239,6 +1239,12 @@ INNER_EOF
     "dns": {
         "servers": [
             {
+                "tag": "dns_fakeip",
+                "type": "fakeip",
+                "inet4_range": "198.18.0.0/15",
+                "inet6_range": "fc00::/18"
+            },
+            {
                 "tag": "dns_cf",
                 "type": "https",
                 "server": "1.1.1.1"
@@ -1251,6 +1257,11 @@ INNER_EOF
             {
                 "tag": "dns_resolver",
                 "type": "local"
+            },
+            {
+                "tag": "dns_block",
+                "type": "hosts",
+                "mapping": {}
             }
         ],
         "strategy": "$default_strategy",
@@ -1259,6 +1270,11 @@ INNER_EOF
             {
                 "rule_set": ["geosite-category-ads-all"],
                 "action": "reject"
+            },
+            {
+                "rule_set": ["geosite-netflix", "geosite-disney", "geosite-category-media"],
+                "server": "dns_fakeip",
+                "query_type": ["A", "AAAA"]
             },
             {
                 "rule_set": ["geoip-cn", "geosite-cn"],
@@ -2207,6 +2223,1274 @@ change_dns_servers() {
     fi
 }
 
+# Function to configure streaming media unlock (类似 SNI Proxy + smartdns)
+configure_streaming_unlock() {
+    if [[ ! -f /etc/sing-box/config.json ]]; then
+        echo -e "${RED}Error: Configuration file not found.${NC}"
+        return 1
+    fi
+
+    echo -e "\n${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║${NC}  ${YELLOW}流媒体解锁配置 (Streaming Media Unlock)${NC}       ${BLUE}║${NC}"
+    echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}\n"
+
+    echo -e "${CYAN}此功能类似 SNI Proxy + smartdns 方案，通过以下方式实现解锁:${NC}"
+    echo -e "  ${GREEN}✓${NC} DNS 分流 - 不同流媒体使用不同 DNS 策略"
+    echo -e "  ${GREEN}✓${NC} FakeIP 加速 - 减少 DNS 查询延迟"
+    echo -e "  ${GREEN}✓${NC} IPv6 优先 - 提高解锁成功率"
+    echo -e "  ${GREEN}✓${NC} 智能路由 - 自动选择最佳线路\n"
+
+    echo -e "${YELLOW}选择配置模式:${NC}"
+    echo -e "  ${CYAN}1)${NC} 启用 FakeIP 模式 (推荐 - 性能最佳)"
+    echo -e "  ${CYAN}2)${NC} 标准 DNS 模式 (兼容性最佳)"
+    echo -e "  ${CYAN}3)${NC} 查看当前配置"
+    echo -e "  ${CYAN}0)${NC} 返回主菜单\n"
+
+    read -p "$(echo -e "${YELLOW}请选择 [0-3]: ${NC}")" unlock_choice
+
+    case $unlock_choice in
+        1)
+            echo -e "\n${BLUE}启用 FakeIP 模式${NC}"
+
+            # 检查是否已有 FakeIP 服务器
+            local has_fakeip=$(jq -e '.dns.servers[] | select(.type == "fakeip")' /etc/sing-box/config.json >/dev/null 2>&1; echo $?)
+
+            if [[ $has_fakeip -ne 0 ]]; then
+                echo -e "${CYAN}添加 FakeIP DNS 服务器...${NC}"
+                jq '.dns.servers = [{
+                    "tag": "dns_fakeip",
+                    "type": "fakeip",
+                    "inet4_range": "198.18.0.0/15",
+                    "inet6_range": "fc00::/18"
+                }] + .dns.servers' /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+            fi
+
+            # 更新 DNS 规则 - 流媒体使用 FakeIP
+            echo -e "${CYAN}配置流媒体 DNS 规则...${NC}"
+            jq '
+                .dns.rules = [
+                    {
+                        "rule_set": ["geosite-category-ads-all"],
+                        "action": "reject"
+                    },
+                    {
+                        "rule_set": ["geosite-netflix", "geosite-disney", "geosite-category-media"],
+                        "server": "dns_fakeip",
+                        "query_type": ["A", "AAAA"]
+                    }
+                ] + (.dns.rules | map(select(.rule_set[0] != "geosite-netflix" and .rule_set[0] != "geosite-disney" and .rule_set[0] != "geosite-category-media" and .rule_set[0] != "geosite-category-ads-all")))
+            ' /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+
+            # 确保 experimental.cache_file.store_fakeip 启用
+            echo -e "${CYAN}启用 FakeIP 缓存...${NC}"
+            jq '.experimental.cache_file.store_fakeip = true' /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+
+            echo -e "${GREEN}✓ FakeIP 模式已启用${NC}"
+            echo -e "${CYAN}性能优势:${NC}"
+            echo -e "  - 减少 DNS 查询延迟 50-200ms"
+            echo -e "  - 提高分流准确性"
+            echo -e "  - 降低 DNS 泄漏风险"
+            ;;
+
+        2)
+            echo -e "\n${BLUE}配置标准 DNS 模式${NC}"
+
+            # 移除 FakeIP 规则，使用标准 DNS
+            echo -e "${CYAN}配置流媒体 DNS 策略...${NC}"
+
+            # 确保流媒体使用 IPv6 优先策略
+            jq '
+                .dns.rules = [
+                    {
+                        "rule_set": ["geosite-category-ads-all"],
+                        "action": "reject"
+                    },
+                    {
+                        "rule_set": ["geosite-netflix"],
+                        "server": "dns_cf",
+                        "strategy": "ipv6_only"
+                    },
+                    {
+                        "rule_set": ["geosite-disney"],
+                        "server": "dns_cf",
+                        "strategy": "ipv6_only"
+                    },
+                    {
+                        "rule_set": ["geosite-category-media"],
+                        "server": "dns_cf",
+                        "strategy": "ipv6_only"
+                    }
+                ] + (.dns.rules | map(select(.rule_set[0] != "geosite-netflix" and .rule_set[0] != "geosite-disney" and .rule_set[0] != "geosite-category-media" and .rule_set[0] != "geosite-category-ads-all")))
+            ' /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+
+            echo -e "${GREEN}✓ 标准 DNS 模式已配置${NC}"
+            echo -e "${CYAN}特点:${NC}"
+            echo -e "  - 兼容性最佳"
+            echo -e "  - IPv6 优先解锁"
+            echo -e "  - 适合所有场景"
+            ;;
+
+        3)
+            echo -e "\n${BLUE}当前流媒体解锁配置${NC}"
+            echo -e "${CYAN}═══════════════════════════════════════${NC}\n"
+
+            # 检查 FakeIP 配置
+            local has_fakeip=$(jq -e '.dns.servers[] | select(.type == "fakeip")' /etc/sing-box/config.json >/dev/null 2>&1; echo $?)
+            if [[ $has_fakeip -eq 0 ]]; then
+                echo -e "${GREEN}✓ FakeIP 模式: 已启用${NC}"
+                jq -r '.dns.servers[] | select(.type == "fakeip")' /etc/sing-box/config.json
+            else
+                echo -e "${YELLOW}○ FakeIP 模式: 未启用${NC}"
+            fi
+
+            echo -e "\n${CYAN}流媒体 DNS 规则:${NC}"
+            jq -r '.dns.rules[] | select(.rule_set != null) | select(.rule_set[] | contains("netflix") or contains("disney") or contains("media"))' /etc/sing-box/config.json 2>/dev/null || echo -e "${YELLOW}未找到流媒体规则${NC}"
+
+            echo -e "\n${CYAN}FakeIP 缓存状态:${NC}"
+            local fakeip_cache=$(jq -r '.experimental.cache_file.store_fakeip // false' /etc/sing-box/config.json)
+            if [[ "$fakeip_cache" == "true" ]]; then
+                echo -e "${GREEN}✓ 已启用${NC}"
+            else
+                echo -e "${YELLOW}○ 未启用${NC}"
+            fi
+
+            return 0
+            ;;
+
+        0)
+            return 0
+            ;;
+
+        *)
+            echo -e "${RED}无效选项${NC}"
+            return 1
+            ;;
+    esac
+
+    # 应用配置
+    chown sing-box:sing-box /etc/sing-box/config.json
+    chmod 640 /etc/sing-box/config.json
+
+    if ! format_config; then
+        echo -e "${RED}Error: Configuration validation failed.${NC}"
+        return 1
+    fi
+
+    echo -e "\n${CYAN}重启 Sing-Box 服务以应用更改...${NC}"
+    systemctl restart sing-box
+
+    if systemctl is-active --quiet sing-box; then
+        echo -e "${GREEN}✓ 流媒体解锁配置已成功应用!${NC}\n"
+
+        echo -e "${BLUE}使用建议:${NC}"
+        echo -e "  ${CYAN}1.${NC} 确保服务器支持 IPv6"
+        echo -e "  ${CYAN}2.${NC} 客户端需要启用 IPv6"
+        echo -e "  ${CYAN}3.${NC} 测试流媒体访问: Netflix, Disney+, etc."
+        echo -e "  ${CYAN}4.${NC} 如遇问题，可切换到标准 DNS 模式\n"
+    else
+        echo -e "${RED}✗ 服务重启失败，请检查配置${NC}"
+        return 1
+    fi
+}
+
+# Function to configure DNS routing (按平台配置不同 DNS)
+configure_dns_routing() {
+    echo -e "\n${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║${NC}  ${YELLOW}DNS 分流配置 (按平台配置不同 DNS)${NC}              ${BLUE}║${NC}"
+    echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}\n"
+
+    echo -e "${CYAN}此功能允许为不同的流媒体平台配置不同的 DNS 服务器${NC}"
+    echo -e "${CYAN}例如: Netflix 使用 Cloudflare, Disney+ 使用 Google DNS${NC}\n"
+
+    echo -e "${YELLOW}请选择操作:${NC}"
+    echo -e "  ${CYAN}1)${NC} 配置 DNS 分流规则"
+    echo -e "  ${CYAN}2)${NC} 查看当前 DNS 分流配置"
+    echo -e "  ${CYAN}3)${NC} 恢复默认 DNS 配置"
+    echo -e "  ${CYAN}0)${NC} 返回主菜单\n"
+
+    read -p "请选择 [0-3]: " dns_routing_choice
+
+    case $dns_routing_choice in
+        1)
+            configure_dns_routing_rules
+            ;;
+        2)
+            view_dns_routing_config
+            ;;
+        3)
+            restore_default_dns_config
+            ;;
+        0)
+            return
+            ;;
+        *)
+            echo -e "${RED}无效选择${NC}"
+            ;;
+    esac
+}
+
+# Function to configure custom DNS server
+configure_custom_dns() {
+    echo -e "\n${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║${NC}  ${YELLOW}配置自定义解锁 DNS 服务器${NC}                      ${BLUE}║${NC}"
+    echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}\n"
+
+    # 输入 DNS 服务器地址
+    while true; do
+        read -p "请输入 DNS 服务器地址 (IP 或域名): " custom_dns_server
+
+        # 验证输入不为空
+        if [[ -z "$custom_dns_server" ]]; then
+            echo -e "${RED}错误: DNS 服务器地址不能为空${NC}"
+            continue
+        fi
+
+        # 简单验证 IP 地址或域名格式
+        if [[ $custom_dns_server =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ $custom_dns_server =~ ^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$ ]]; then
+            break
+        else
+            echo -e "${RED}错误: 无效的 IP 地址或域名格式${NC}"
+        fi
+    done
+
+    # 选择 DNS 协议类型
+    echo -e "\n${YELLOW}选择 DNS 协议类型:${NC}"
+    echo -e "  ${CYAN}1)${NC} UDP (传统 DNS, 端口 53)"
+    echo -e "  ${CYAN}2)${NC} TCP (传统 DNS over TCP, 端口 53)"
+    echo -e "  ${CYAN}3)${NC} DoH (DNS-over-HTTPS, 端口 443) ${GREEN}推荐${NC}"
+    echo -e "  ${CYAN}4)${NC} DoT (DNS-over-TLS, 端口 853)"
+    echo -e "  ${CYAN}5)${NC} DoQ (DNS-over-QUIC, 端口 853)"
+    echo -e "  ${CYAN}6)${NC} DoH3 (DNS-over-HTTP/3, 端口 443)\n"
+
+    read -p "请选择 [1-6, 默认: 3]: " dns_protocol
+    dns_protocol=${dns_protocol:-3}
+
+    case $dns_protocol in
+        1)
+            custom_dns_type="udp"
+            custom_dns_port=53
+            ;;
+        2)
+            custom_dns_type="tcp"
+            custom_dns_port=53
+            ;;
+        3)
+            custom_dns_type="https"
+            custom_dns_port=443
+            read -p "请输入 DoH 路径 [默认: /dns-query]: " custom_dns_path
+            custom_dns_path=${custom_dns_path:-/dns-query}
+            ;;
+        4)
+            custom_dns_type="tls"
+            custom_dns_port=853
+            ;;
+        5)
+            custom_dns_type="quic"
+            custom_dns_port=853
+            ;;
+        6)
+            custom_dns_type="http3"
+            custom_dns_port=443
+            read -p "请输入 DoH3 路径 [默认: /dns-query]: " custom_dns_path
+            custom_dns_path=${custom_dns_path:-/dns-query}
+            ;;
+        *)
+            custom_dns_type="https"
+            custom_dns_port=443
+            custom_dns_path="/dns-query"
+            ;;
+    esac
+
+    # 自定义端口
+    read -p "DNS 端口 [默认: $custom_dns_port]: " custom_port_input
+    if [[ -n "$custom_port_input" ]]; then
+        custom_dns_port=$custom_port_input
+    fi
+
+    # 自定义标签名称
+    read -p "DNS 服务器标签名称 [默认: dns_custom_unlock]: " custom_dns_tag
+    custom_dns_tag=${custom_dns_tag:-dns_custom_unlock}
+
+    # 显示配置摘要
+    echo -e "\n${CYAN}自定义 DNS 配置摘要:${NC}"
+    echo -e "  标签: ${GREEN}$custom_dns_tag${NC}"
+    echo -e "  类型: ${GREEN}$custom_dns_type${NC}"
+    echo -e "  服务器: ${GREEN}$custom_dns_server${NC}"
+    echo -e "  端口: ${GREEN}$custom_dns_port${NC}"
+    if [[ -n "$custom_dns_path" ]]; then
+        echo -e "  路径: ${GREEN}$custom_dns_path${NC}"
+    fi
+
+    read -p "确认配置? [Y/n]: " confirm
+    confirm=${confirm:-Y}
+
+    if [[ $confirm =~ ^[Yy]$ ]]; then
+        custom_dns_configured=true
+        echo -e "${GREEN}✓ 自定义 DNS 配置完成${NC}\n"
+    else
+        echo -e "${YELLOW}已取消自定义 DNS 配置${NC}\n"
+        custom_dns_configured=false
+    fi
+}
+
+# Function to configure DNS routing rules
+configure_dns_routing_rules() {
+    echo -e "\n${CYAN}配置 DNS 分流规则${NC}\n"
+
+    # 检查配置文件
+    if [[ ! -f /etc/sing-box/config.json ]]; then
+        echo -e "${RED}错误: 配置文件不存在${NC}"
+        return 1
+    fi
+
+    # 显示可用的 DNS 服务器
+    echo -e "${YELLOW}可用的 DNS 服务器:${NC}"
+    echo -e "  ${CYAN}1)${NC} Cloudflare DNS (1.1.1.1) - 推荐用于流媒体解锁"
+    echo -e "  ${CYAN}2)${NC} Google DNS (8.8.8.8) - 稳定性好"
+    echo -e "  ${CYAN}3)${NC} AdGuard DNS (94.140.14.14) - 广告过滤"
+    echo -e "  ${CYAN}4)${NC} Quad9 DNS (9.9.9.9) - 安全防护"
+    echo -e "  ${CYAN}5)${NC} 本地 DNS (系统默认)"
+    echo -e "  ${CYAN}6)${NC} 自定义解锁 DNS 服务器 ${YELLOW}(输入自己的 DNS)${NC}\n"
+
+    # 初始化自定义 DNS 变量
+    custom_dns_configured=false
+    custom_dns_tag=""
+    custom_dns_type=""
+    custom_dns_server=""
+    custom_dns_port=""
+    custom_dns_path=""
+
+    # 配置 Netflix
+    echo -e "${YELLOW}[1/5] Netflix 使用哪个 DNS 服务器?${NC}"
+    read -p "请选择 [1-6, 默认: 1]: " netflix_dns
+    netflix_dns=${netflix_dns:-1}
+
+    # 如果选择自定义 DNS，配置自定义 DNS 服务器
+    if [[ $netflix_dns == 6 ]] && [[ $custom_dns_configured == false ]]; then
+        configure_custom_dns
+    fi
+
+    # 配置 Disney+
+    echo -e "${YELLOW}[2/5] Disney+ 使用哪个 DNS 服务器?${NC}"
+    read -p "请选择 [1-6, 默认: 2]: " disney_dns
+    disney_dns=${disney_dns:-2}
+
+    if [[ $disney_dns == 6 ]] && [[ $custom_dns_configured == false ]]; then
+        configure_custom_dns
+    fi
+
+    # 配置 Spotify
+    echo -e "${YELLOW}[3/5] Spotify 使用哪个 DNS 服务器?${NC}"
+    read -p "请选择 [1-6, 默认: 3]: " spotify_dns
+    spotify_dns=${spotify_dns:-3}
+
+    if [[ $spotify_dns == 6 ]] && [[ $custom_dns_configured == false ]]; then
+        configure_custom_dns
+    fi
+
+    # 配置 YouTube
+    echo -e "${YELLOW}[4/5] YouTube 使用哪个 DNS 服务器?${NC}"
+    read -p "请选择 [1-6, 默认: 2]: " youtube_dns
+    youtube_dns=${youtube_dns:-2}
+
+    if [[ $youtube_dns == 6 ]] && [[ $custom_dns_configured == false ]]; then
+        configure_custom_dns
+    fi
+
+    # 配置其他流媒体
+    echo -e "${YELLOW}[5/5] 其他流媒体使用哪个 DNS 服务器?${NC}"
+    read -p "请选择 [1-6, 默认: 1]: " other_dns
+    other_dns=${other_dns:-1}
+
+    if [[ $other_dns == 6 ]] && [[ $custom_dns_configured == false ]]; then
+        configure_custom_dns
+    fi
+
+    # 配置解析策略
+    echo -e "\n${YELLOW}选择解析策略:${NC}"
+    echo -e "  ${CYAN}1)${NC} ipv4_only - 仅 IPv4"
+    echo -e "  ${CYAN}2)${NC} ipv6_only - 仅 IPv6 (推荐用于流媒体解锁)"
+    echo -e "  ${CYAN}3)${NC} prefer_ipv4 - 优先 IPv4"
+    echo -e "  ${CYAN}4)${NC} prefer_ipv6 - 优先 IPv6\n"
+
+    read -p "Netflix 解析策略 [1-4, 默认: 2]: " netflix_strategy
+    netflix_strategy=${netflix_strategy:-2}
+
+    read -p "Disney+ 解析策略 [1-4, 默认: 2]: " disney_strategy
+    disney_strategy=${disney_strategy:-2}
+
+    read -p "其他流媒体解析策略 [1-4, 默认: 4]: " other_strategy
+    other_strategy=${other_strategy:-4}
+
+    # 转换选择为实际值
+    get_dns_server() {
+        case $1 in
+            1) echo "dns_cloudflare" ;;
+            2) echo "dns_google" ;;
+            3) echo "dns_adguard" ;;
+            4) echo "dns_quad9" ;;
+            5) echo "dns_local" ;;
+            6) echo "$custom_dns_tag" ;;
+            *) echo "dns_cloudflare" ;;
+        esac
+    }
+
+    get_strategy() {
+        case $1 in
+            1) echo "ipv4_only" ;;
+            2) echo "ipv6_only" ;;
+            3) echo "prefer_ipv4" ;;
+            4) echo "prefer_ipv6" ;;
+            *) echo "prefer_ipv4" ;;
+        esac
+    }
+
+    netflix_server=$(get_dns_server $netflix_dns)
+    disney_server=$(get_dns_server $disney_dns)
+    spotify_server=$(get_dns_server $spotify_dns)
+    youtube_server=$(get_dns_server $youtube_dns)
+    other_server=$(get_dns_server $other_dns)
+
+    netflix_strat=$(get_strategy $netflix_strategy)
+    disney_strat=$(get_strategy $disney_strategy)
+    other_strat=$(get_strategy $other_strategy)
+
+    echo -e "\n${CYAN}正在应用 DNS 分流配置...${NC}"
+
+    # 备份当前配置
+    cp /etc/sing-box/config.json /etc/sing-box/config.json.backup.$(date +%Y%m%d_%H%M%S)
+
+    # 更新 DNS 配置
+    # 首先确保所有预设 DNS 服务器都存在
+    if [[ $custom_dns_configured == true ]]; then
+        # 如果配置了自定义 DNS，添加到服务器列表
+        if [[ "$custom_dns_type" == "https" ]] || [[ "$custom_dns_type" == "http3" ]]; then
+            # DoH 或 DoH3 需要 path 参数
+            jq --arg cf "dns_cloudflare" \
+               --arg gg "dns_google" \
+               --arg ag "dns_adguard" \
+               --arg q9 "dns_quad9" \
+               --arg local "dns_local" \
+               --arg custom_tag "$custom_dns_tag" \
+               --arg custom_type "$custom_dns_type" \
+               --arg custom_server "$custom_dns_server" \
+               --argjson custom_port "$custom_dns_port" \
+               --arg custom_path "$custom_dns_path" \
+               '.dns.servers = [
+                   {
+                       "tag": $cf,
+                       "type": "https",
+                       "server": "1.1.1.1",
+                       "server_port": 443
+                   },
+                   {
+                       "tag": $gg,
+                       "type": "https",
+                       "server": "8.8.8.8",
+                       "server_port": 443
+                   },
+                   {
+                       "tag": $ag,
+                       "type": "https",
+                       "server": "94.140.14.14",
+                       "server_port": 443
+                   },
+                   {
+                       "tag": $q9,
+                       "type": "https",
+                       "server": "9.9.9.9",
+                       "server_port": 443
+                   },
+                   {
+                       "tag": $local,
+                       "type": "local"
+                   },
+                   {
+                       "tag": $custom_tag,
+                       "type": $custom_type,
+                       "server": $custom_server,
+                       "server_port": $custom_port,
+                       "path": $custom_path
+                   }
+               ] + (.dns.servers | map(select(.tag == "dns_fakeip" or .tag == "dns_block")))' \
+               /etc/sing-box/config.json > /tmp/config_temp.json && mv /tmp/config_temp.json /etc/sing-box/config.json
+        else
+            # UDP、TCP、DoT、DoQ 不需要 path 参数
+            jq --arg cf "dns_cloudflare" \
+               --arg gg "dns_google" \
+               --arg ag "dns_adguard" \
+               --arg q9 "dns_quad9" \
+               --arg local "dns_local" \
+               --arg custom_tag "$custom_dns_tag" \
+               --arg custom_type "$custom_dns_type" \
+               --arg custom_server "$custom_dns_server" \
+               --argjson custom_port "$custom_dns_port" \
+               '.dns.servers = [
+                   {
+                       "tag": $cf,
+                       "type": "https",
+                       "server": "1.1.1.1",
+                       "server_port": 443
+                   },
+                   {
+                       "tag": $gg,
+                       "type": "https",
+                       "server": "8.8.8.8",
+                       "server_port": 443
+                   },
+                   {
+                       "tag": $ag,
+                       "type": "https",
+                       "server": "94.140.14.14",
+                       "server_port": 443
+                   },
+                   {
+                       "tag": $q9,
+                       "type": "https",
+                       "server": "9.9.9.9",
+                       "server_port": 443
+                   },
+                   {
+                       "tag": $local,
+                       "type": "local"
+                   },
+                   {
+                       "tag": $custom_tag,
+                       "type": $custom_type,
+                       "server": $custom_server,
+                       "server_port": $custom_port
+                   }
+               ] + (.dns.servers | map(select(.tag == "dns_fakeip" or .tag == "dns_block")))' \
+               /etc/sing-box/config.json > /tmp/config_temp.json && mv /tmp/config_temp.json /etc/sing-box/config.json
+        fi
+    else
+        # 没有自定义 DNS，使用原有配置
+        jq --arg cf "dns_cloudflare" \
+           --arg gg "dns_google" \
+           --arg ag "dns_adguard" \
+           --arg q9 "dns_quad9" \
+           --arg local "dns_local" \
+           '.dns.servers = [
+               {
+                   "tag": $cf,
+                   "type": "https",
+                   "server": "1.1.1.1",
+                   "server_port": 443
+               },
+               {
+                   "tag": $gg,
+                   "type": "https",
+                   "server": "8.8.8.8",
+                   "server_port": 443
+               },
+               {
+                   "tag": $ag,
+                   "type": "https",
+                   "server": "94.140.14.14",
+                   "server_port": 443
+               },
+               {
+                   "tag": $q9,
+                   "type": "https",
+                   "server": "9.9.9.9",
+                   "server_port": 443
+               },
+               {
+                   "tag": $local,
+                   "type": "local"
+               }
+           ] + (.dns.servers | map(select(.tag == "dns_fakeip" or .tag == "dns_block")))' \
+           /etc/sing-box/config.json > /tmp/config_temp.json && mv /tmp/config_temp.json /etc/sing-box/config.json
+    fi
+
+    # 更新 DNS 规则
+    jq --arg netflix_srv "$netflix_server" \
+       --arg disney_srv "$disney_server" \
+       --arg spotify_srv "$spotify_server" \
+       --arg youtube_srv "$youtube_server" \
+       --arg other_srv "$other_server" \
+       --arg netflix_st "$netflix_strat" \
+       --arg disney_st "$disney_strat" \
+       --arg other_st "$other_strat" \
+       '.dns.rules = [
+           (.dns.rules[] | select(.rule_set and (.rule_set | contains(["geosite-category-ads-all"])))),
+           {
+               "rule_set": ["geosite-netflix"],
+               "server": $netflix_srv,
+               "strategy": $netflix_st
+           },
+           {
+               "rule_set": ["geosite-disney"],
+               "server": $disney_srv,
+               "strategy": $disney_st
+           },
+           {
+               "rule_set": ["geosite-spotify"],
+               "server": $spotify_srv,
+               "strategy": "prefer_ipv4"
+           },
+           {
+               "rule_set": ["geosite-youtube"],
+               "server": $youtube_srv,
+               "strategy": "prefer_ipv6"
+           },
+           {
+               "rule_set": ["geosite-category-media"],
+               "server": $other_srv,
+               "strategy": $other_st
+           }
+       ] + (.dns.rules | map(select(.rule_set and (.rule_set | contains(["geoip-cn", "geosite-cn"])))))
+       + [{"server": "dns_google", "strategy": "prefer_ipv4"}]' \
+       /etc/sing-box/config.json > /tmp/config_temp.json && mv /tmp/config_temp.json /etc/sing-box/config.json
+
+    echo -e "${GREEN}✓ DNS 分流配置已更新${NC}\n"
+
+    # 显示配置摘要
+    echo -e "${CYAN}配置摘要:${NC}"
+    echo -e "  Netflix  → $netflix_server ($netflix_strat)"
+    echo -e "  Disney+  → $disney_server ($disney_strat)"
+    echo -e "  Spotify  → $spotify_server (prefer_ipv4)"
+    echo -e "  YouTube  → $youtube_server (prefer_ipv6)"
+    echo -e "  其他流媒体 → $other_server ($other_strat)"
+
+    # 如果配置了自定义 DNS，显示详细信息
+    if [[ $custom_dns_configured == true ]]; then
+        echo -e "\n${YELLOW}自定义 DNS 服务器:${NC}"
+        echo -e "  标签: ${GREEN}$custom_dns_tag${NC}"
+        echo -e "  类型: ${GREEN}$custom_dns_type${NC}"
+        echo -e "  服务器: ${GREEN}$custom_dns_server:$custom_dns_port${NC}"
+        if [[ -n "$custom_dns_path" ]]; then
+            echo -e "  路径: ${GREEN}$custom_dns_path${NC}"
+        fi
+    fi
+    echo ""
+
+    # 验证配置
+    if sing-box check -c /etc/sing-box/config.json >/dev/null 2>&1; then
+        echo -e "${GREEN}✓ 配置验证通过${NC}"
+
+        read -p "是否立即重启服务以应用配置? [Y/n]: " restart_confirm
+        restart_confirm=${restart_confirm:-Y}
+
+        if [[ $restart_confirm =~ ^[Yy]$ ]]; then
+            systemctl restart sing-box
+            if systemctl is-active --quiet sing-box; then
+                echo -e "${GREEN}✓ 服务重启成功，DNS 分流配置已生效${NC}"
+            else
+                echo -e "${RED}✗ 服务重启失败，请检查日志${NC}"
+                return 1
+            fi
+        fi
+    else
+        echo -e "${RED}✗ 配置验证失败${NC}"
+        echo -e "${YELLOW}正在恢复备份...${NC}"
+        cp /etc/sing-box/config.json.backup.$(date +%Y%m%d)* /etc/sing-box/config.json 2>/dev/null
+        return 1
+    fi
+}
+
+# Function to view DNS routing configuration
+view_dns_routing_config() {
+    echo -e "\n${CYAN}当前 DNS 分流配置${NC}\n"
+
+    if [[ ! -f /etc/sing-box/config.json ]]; then
+        echo -e "${RED}错误: 配置文件不存在${NC}"
+        return 1
+    fi
+
+    echo -e "${YELLOW}DNS 服务器:${NC}"
+    jq -r '.dns.servers[] | "  \(.tag): \(.type) - \(.server // "系统默认")"' /etc/sing-box/config.json
+
+    echo -e "\n${YELLOW}DNS 分流规则:${NC}"
+    jq -r '.dns.rules[] | select(.rule_set) | "  \(.rule_set | join(", ")) → \(.server) (\(.strategy // "默认"))"' /etc/sing-box/config.json
+}
+
+# Function to restore default DNS configuration
+restore_default_dns_config() {
+    echo -e "\n${YELLOW}确认要恢复默认 DNS 配置吗?${NC}"
+    read -p "此操作将覆盖当前的 DNS 分流设置 [y/N]: " confirm
+
+    if [[ ! $confirm =~ ^[Yy]$ ]]; then
+        echo -e "${CYAN}已取消${NC}"
+        return
+    fi
+
+    # 备份当前配置
+    cp /etc/sing-box/config.json /etc/sing-box/config.json.backup.$(date +%Y%m%d_%H%M%S)
+
+    # 恢复默认 DNS 配置
+    jq '.dns.servers = [
+        {
+            "tag": "dns_cf",
+            "type": "https",
+            "server": "1.1.1.1"
+        },
+        {
+            "tag": "dns_google",
+            "type": "https",
+            "server": "8.8.8.8"
+        },
+        {
+            "tag": "dns_local",
+            "type": "local"
+        }
+    ] + (.dns.servers | map(select(.tag == "dns_fakeip" or .tag == "dns_block")))' \
+    /etc/sing-box/config.json > /tmp/config_temp.json && mv /tmp/config_temp.json /etc/sing-box/config.json
+
+    echo -e "${GREEN}✓ 已恢复默认 DNS 配置${NC}"
+
+    systemctl restart sing-box
+    if systemctl is-active --quiet sing-box; then
+        echo -e "${GREEN}✓ 服务重启成功${NC}"
+    else
+        echo -e "${RED}✗ 服务重启失败${NC}"
+    fi
+}
+
+# Function to configure DNS unlock server (纯 DNS 解锁服务器)
+configure_dns_unlock_server() {
+    echo -e "\n${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║${NC}  ${YELLOW}纯 DNS 解锁服务器配置 (不代理流量)${NC}            ${BLUE}║${NC}"
+    echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}\n"
+
+    echo -e "${CYAN}此功能将 sing-box 配置为纯 DNS 解锁服务器${NC}"
+    echo -e "${CYAN}只提供 DNS 解析服务，不代理流量${NC}"
+    echo -e "${CYAN}客户端设置 DNS 为本服务器 IP 即可使用${NC}\n"
+
+    echo -e "${YELLOW}请选择操作:${NC}"
+    echo -e "  ${CYAN}1)${NC} 部署纯 DNS 解锁服务器"
+    echo -e "  ${CYAN}2)${NC} 查看 DNS 服务器配置"
+    echo -e "  ${CYAN}3)${NC} 测试 DNS 服务器"
+    echo -e "  ${CYAN}4)${NC} 生成客户端配置说明"
+    echo -e "  ${CYAN}0)${NC} 返回主菜单\n"
+
+    read -p "请选择 [0-4]: " dns_server_choice
+
+    case $dns_server_choice in
+        1)
+            deploy_dns_unlock_server
+            ;;
+        2)
+            view_dns_server_config
+            ;;
+        3)
+            test_dns_server
+            ;;
+        4)
+            generate_client_dns_guide
+            ;;
+        0)
+            return
+            ;;
+        *)
+            echo -e "${RED}无效选择${NC}"
+            ;;
+    esac
+}
+
+# Function to deploy DNS unlock server
+deploy_dns_unlock_server() {
+    echo -e "\n${CYAN}部署纯 DNS 解锁服务器${NC}\n"
+
+    # 检查是否已安装 sing-box
+    if ! command -v sing-box &> /dev/null; then
+        echo -e "${RED}错误: sing-box 未安装${NC}"
+        echo -e "${YELLOW}请先运行主菜单选项 1 安装 sing-box${NC}"
+        return 1
+    fi
+
+    # 配置监听地址
+    echo -e "${YELLOW}DNS 服务器监听配置${NC}"
+    read -p "监听地址 [默认: 0.0.0.0]: " listen_addr
+    listen_addr=${listen_addr:-0.0.0.0}
+
+    read -p "监听端口 [默认: 53]: " listen_port
+    listen_port=${listen_port:-53}
+
+    # 选择上游 DNS 服务器
+    echo -e "\n${YELLOW}选择上游 DNS 服务器 (可多选，用空格分隔)${NC}"
+    echo -e "  ${CYAN}1)${NC} Cloudflare DNS (1.1.1.1)"
+    echo -e "  ${CYAN}2)${NC} Google DNS (8.8.8.8)"
+    echo -e "  ${CYAN}3)${NC} AdGuard DNS (94.140.14.14)"
+    echo -e "  ${CYAN}4)${NC} Quad9 DNS (9.9.9.9)"
+    echo -e "  ${CYAN}5)${NC} 全部\n"
+
+    read -p "请选择 [1-5, 默认: 5]: " upstream_choice
+    upstream_choice=${upstream_choice:-5}
+
+    # 是否启用广告拦截
+    echo -e "\n${YELLOW}是否启用广告域名拦截?${NC}"
+    read -p "[Y/n]: " enable_adblock
+    enable_adblock=${enable_adblock:-Y}
+
+    # 是否启用 FakeIP
+    echo -e "\n${YELLOW}是否启用 FakeIP 加速?${NC}"
+    echo -e "${CYAN}FakeIP 可以显著提升 DNS 解析速度${NC}"
+    read -p "[Y/n]: " enable_fakeip
+    enable_fakeip=${enable_fakeip:-Y}
+
+    echo -e "\n${CYAN}正在生成 DNS 解锁服务器配置...${NC}"
+
+    # 备份现有配置
+    if [[ -f /etc/sing-box/config.json ]]; then
+        cp /etc/sing-box/config.json /etc/sing-box/config.json.backup.dns.$(date +%Y%m%d_%H%M%S)
+        echo -e "${GREEN}✓ 已备份现有配置${NC}"
+    fi
+
+    # 创建配置目录
+    mkdir -p /etc/sing-box
+
+    # 生成配置文件
+    cat > /etc/sing-box/config.json << EOF
+{
+  "log": {
+    "level": "info",
+    "timestamp": true,
+    "output": "/var/log/sing-box/dns-unlock.log"
+  },
+  "dns": {
+    "servers": [
+EOF
+
+    # 添加 FakeIP 服务器
+    if [[ $enable_fakeip =~ ^[Yy]$ ]]; then
+        cat >> /etc/sing-box/config.json << EOF
+      {
+        "tag": "dns_fakeip",
+        "type": "fakeip",
+        "inet4_range": "198.18.0.0/15",
+        "inet6_range": "fc00::/18"
+      },
+EOF
+    fi
+
+    # 添加上游 DNS 服务器
+    if [[ $upstream_choice == 5 ]] || [[ $upstream_choice =~ 1 ]]; then
+        cat >> /etc/sing-box/config.json << EOF
+      {
+        "tag": "dns_cloudflare",
+        "type": "https",
+        "server": "1.1.1.1",
+        "server_port": 443,
+        "path": "/dns-query"
+      },
+EOF
+    fi
+
+    if [[ $upstream_choice == 5 ]] || [[ $upstream_choice =~ 2 ]]; then
+        cat >> /etc/sing-box/config.json << EOF
+      {
+        "tag": "dns_google",
+        "type": "https",
+        "server": "8.8.8.8",
+        "server_port": 443,
+        "path": "/dns-query"
+      },
+EOF
+    fi
+
+    if [[ $upstream_choice == 5 ]] || [[ $upstream_choice =~ 3 ]]; then
+        cat >> /etc/sing-box/config.json << EOF
+      {
+        "tag": "dns_adguard",
+        "type": "https",
+        "server": "94.140.14.14",
+        "server_port": 443,
+        "path": "/dns-query"
+      },
+EOF
+    fi
+
+    if [[ $upstream_choice == 5 ]] || [[ $upstream_choice =~ 4 ]]; then
+        cat >> /etc/sing-box/config.json << EOF
+      {
+        "tag": "dns_quad9",
+        "type": "https",
+        "server": "9.9.9.9",
+        "server_port": 443,
+        "path": "/dns-query"
+      },
+EOF
+    fi
+
+    # 添加本地 DNS 和拦截 DNS
+    cat >> /etc/sing-box/config.json << EOF
+      {
+        "tag": "dns_local",
+        "type": "local"
+      },
+      {
+        "tag": "dns_block",
+        "type": "hosts",
+        "mapping": {}
+      }
+    ],
+    "strategy": "prefer_ipv4",
+    "independent_cache": true,
+    "rules": [
+EOF
+
+    # 添加广告拦截规则
+    if [[ $enable_adblock =~ ^[Yy]$ ]]; then
+        cat >> /etc/sing-box/config.json << EOF
+      {
+        "rule_set": ["geosite-category-ads-all"],
+        "action": "reject"
+      },
+EOF
+    fi
+
+    # 添加 FakeIP 规则
+    if [[ $enable_fakeip =~ ^[Yy]$ ]]; then
+        cat >> /etc/sing-box/config.json << EOF
+      {
+        "rule_set": ["geosite-netflix", "geosite-disney", "geosite-category-media"],
+        "server": "dns_fakeip",
+        "query_type": ["A", "AAAA"]
+      },
+EOF
+    fi
+
+    # 添加流媒体 DNS 规则
+    cat >> /etc/sing-box/config.json << EOF
+      {
+        "rule_set": ["geosite-netflix"],
+        "server": "dns_cloudflare",
+        "strategy": "ipv6_only"
+      },
+      {
+        "rule_set": ["geosite-disney"],
+        "server": "dns_cloudflare",
+        "strategy": "ipv6_only"
+      },
+      {
+        "rule_set": ["geosite-spotify"],
+        "server": "dns_cloudflare",
+        "strategy": "prefer_ipv4"
+      },
+      {
+        "rule_set": ["geosite-youtube"],
+        "server": "dns_google",
+        "strategy": "prefer_ipv6"
+      },
+      {
+        "rule_set": ["geosite-category-media"],
+        "server": "dns_cloudflare",
+        "strategy": "ipv6_only"
+      },
+      {
+        "rule_set": ["geoip-cn", "geosite-cn"],
+        "server": "dns_local",
+        "strategy": "prefer_ipv4"
+      },
+      {
+        "server": "dns_google",
+        "strategy": "prefer_ipv4"
+      }
+    ]
+  },
+  "services": [
+    {
+      "type": "resolved",
+      "listen": "$listen_addr",
+      "listen_port": $listen_port
+    }
+  ],
+  "route": {
+    "rule_set": [
+EOF
+
+    # 添加规则集
+    if [[ $enable_adblock =~ ^[Yy]$ ]]; then
+        cat >> /etc/sing-box/config.json << EOF
+      {
+        "tag": "geosite-category-ads-all",
+        "type": "remote",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/category-ads-all.srs",
+        "download_detour": "direct"
+      },
+EOF
+    fi
+
+    cat >> /etc/sing-box/config.json << EOF
+      {
+        "tag": "geosite-netflix",
+        "type": "remote",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/netflix.srs",
+        "download_detour": "direct"
+      },
+      {
+        "tag": "geosite-disney",
+        "type": "remote",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/disney.srs",
+        "download_detour": "direct"
+      },
+      {
+        "tag": "geosite-spotify",
+        "type": "remote",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/spotify.srs",
+        "download_detour": "direct"
+      },
+      {
+        "tag": "geosite-youtube",
+        "type": "remote",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/youtube.srs",
+        "download_detour": "direct"
+      },
+      {
+        "tag": "geosite-category-media",
+        "type": "remote",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/category-media.srs",
+        "download_detour": "direct"
+      },
+      {
+        "tag": "geoip-cn",
+        "type": "remote",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geoip/cn.srs",
+        "download_detour": "direct"
+      },
+      {
+        "tag": "geosite-cn",
+        "type": "remote",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/cn.srs",
+        "download_detour": "direct"
+      }
+    ],
+    "auto_detect_interface": true,
+    "final": "direct"
+  },
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    },
+    {
+      "type": "block",
+      "tag": "block"
+    }
+  ],
+  "experimental": {
+    "cache_file": {
+      "enabled": true,
+      "path": "/var/lib/sing-box/cache.db",
+      "store_rdrc": true
+EOF
+
+    if [[ $enable_fakeip =~ ^[Yy]$ ]]; then
+        cat >> /etc/sing-box/config.json << EOF
+,
+      "store_fakeip": true
+EOF
+    fi
+
+    cat >> /etc/sing-box/config.json << EOF
+    }
+  }
+}
+EOF
+
+    echo -e "${GREEN}✓ 配置文件已生成${NC}"
+
+    # 验证配置
+    echo -e "\n${CYAN}验证配置文件...${NC}"
+    if sing-box check -c /etc/sing-box/config.json; then
+        echo -e "${GREEN}✓ 配置验证通过${NC}"
+    else
+        echo -e "${RED}✗ 配置验证失败${NC}"
+        return 1
+    fi
+
+    # 创建日志目录
+    mkdir -p /var/log/sing-box
+
+    # 重启服务
+    echo -e "\n${CYAN}重启 sing-box 服务...${NC}"
+    systemctl restart sing-box
+
+    if systemctl is-active --quiet sing-box; then
+        echo -e "${GREEN}✓ DNS 解锁服务器部署成功！${NC}\n"
+
+        # 显示服务器信息
+        server_ip=$(curl -s https://api.ipify.org 2>/dev/null || echo "获取失败")
+
+        echo -e "${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
+        echo -e "${BLUE}║${NC}  ${YELLOW}DNS 解锁服务器信息${NC}                              ${BLUE}║${NC}"
+        echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}"
+        echo -e "${CYAN}服务器 IP:${NC} $server_ip"
+        echo -e "${CYAN}DNS 端口:${NC} $listen_port"
+        echo -e "${CYAN}监听地址:${NC} $listen_addr:$listen_port"
+        echo -e "${CYAN}FakeIP:${NC} $([ "$enable_fakeip" = "Y" ] && echo "已启用" || echo "未启用")"
+        echo -e "${CYAN}广告拦截:${NC} $([ "$enable_adblock" = "Y" ] && echo "已启用" || echo "未启用")"
+        echo -e "\n${YELLOW}客户端配置:${NC}"
+        echo -e "  将设备的 DNS 设置为: ${GREEN}$server_ip${NC}"
+        echo -e "\n${YELLOW}测试命令:${NC}"
+        echo -e "  ${CYAN}nslookup netflix.com $server_ip${NC}"
+        echo -e "  ${CYAN}dig @$server_ip netflix.com${NC}\n"
+
+        # 检查防火墙
+        if command -v ufw &> /dev/null && ufw status | grep -q "Status: active"; then
+            echo -e "${YELLOW}⚠ 检测到 UFW 防火墙已启用${NC}"
+            read -p "是否自动开放 DNS 端口 $listen_port? [Y/n]: " open_port
+            open_port=${open_port:-Y}
+
+            if [[ $open_port =~ ^[Yy]$ ]]; then
+                ufw allow $listen_port/udp comment "sing-box DNS"
+                ufw allow $listen_port/tcp comment "sing-box DNS"
+                echo -e "${GREEN}✓ 已开放端口 $listen_port${NC}"
+            fi
+        fi
+
+    else
+        echo -e "${RED}✗ 服务启动失败${NC}"
+        echo -e "${YELLOW}查看日志: journalctl -u sing-box -n 50${NC}"
+        return 1
+    fi
+}
+
+# Function to view DNS server configuration
+view_dns_server_config() {
+    echo -e "\n${CYAN}DNS 服务器配置${NC}\n"
+
+    if [[ ! -f /etc/sing-box/config.json ]]; then
+        echo -e "${RED}错误: 配置文件不存在${NC}"
+        return 1
+    fi
+
+    # 检查是否为 DNS 服务器模式
+    if ! jq -e '.services[] | select(.type == "resolved")' /etc/sing-box/config.json >/dev/null 2>&1; then
+        echo -e "${YELLOW}当前配置不是纯 DNS 解锁服务器模式${NC}"
+        return 1
+    fi
+
+    echo -e "${YELLOW}服务配置:${NC}"
+    jq -r '.services[] | select(.type == "resolved") | "  监听地址: \(.listen):\(.listen_port)"' /etc/sing-box/config.json
+
+    echo -e "\n${YELLOW}DNS 服务器:${NC}"
+    jq -r '.dns.servers[] | "  \(.tag): \(.type) - \(.server // "系统默认")"' /etc/sing-box/config.json
+
+    echo -e "\n${YELLOW}DNS 规则:${NC}"
+    jq -r '.dns.rules[] |
+        if .action then
+            "  \(.rule_set | join(", ")) → \(.action)"
+        elif .rule_set then
+            "  \(.rule_set | join(", ")) → \(.server) (\(.strategy // "默认"))"
+        else
+            "  默认 → \(.server) (\(.strategy // "默认"))"
+        end' /etc/sing-box/config.json
+}
+
+# Function to test DNS server
+test_dns_server() {
+    echo -e "\n${CYAN}测试 DNS 服务器${NC}\n"
+
+    # 获取服务器 IP
+    server_ip=$(curl -s https://api.ipify.org 2>/dev/null)
+    if [[ -z "$server_ip" ]]; then
+        read -p "无法自动获取服务器 IP，请手动输入: " server_ip
+    fi
+
+    # 获取 DNS 端口
+    dns_port=$(jq -r '.services[] | select(.type == "resolved") | .listen_port' /etc/sing-box/config.json 2>/dev/null)
+    dns_port=${dns_port:-53}
+
+    echo -e "${YELLOW}测试服务器:${NC} $server_ip:$dns_port\n"
+
+    # 检查必要工具
+    if ! command -v dig &> /dev/null && ! command -v nslookup &> /dev/null; then
+        echo -e "${RED}错误: 需要 dig 或 nslookup 工具${NC}"
+        echo -e "${YELLOW}安装命令:${NC}"
+        echo -e "  Ubuntu/Debian: ${CYAN}apt install dnsutils${NC}"
+        echo -e "  CentOS/RHEL: ${CYAN}yum install bind-utils${NC}"
+        return 1
+    fi
+
+    # 测试域名列表
+    test_domains=("netflix.com" "disneyplus.com" "spotify.com" "youtube.com" "google.com")
+
+    echo -e "${CYAN}开始测试...${NC}\n"
+
+    for domain in "${test_domains[@]}"; do
+        echo -e "${YELLOW}测试: $domain${NC}"
+
+        if command -v dig &> /dev/null; then
+            result=$(dig @$server_ip -p $dns_port $domain +short 2>/dev/null | head -n 3)
+            if [[ -n "$result" ]]; then
+                echo -e "${GREEN}✓ 解析成功:${NC}"
+                echo "$result" | while read line; do
+                    echo -e "  ${CYAN}$line${NC}"
+                done
+            else
+                echo -e "${RED}✗ 解析失败${NC}"
+            fi
+        else
+            nslookup $domain $server_ip 2>/dev/null | grep -A 2 "Name:" | tail -n 2
+        fi
+        echo ""
+    done
+
+    echo -e "${GREEN}测试完成${NC}"
+}
+
+# Function to generate client DNS configuration guide
+generate_client_dns_guide() {
+    echo -e "\n${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║${NC}  ${YELLOW}客户端 DNS 配置指南${NC}                            ${BLUE}║${NC}"
+    echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}\n"
+
+    server_ip=$(curl -s https://api.ipify.org 2>/dev/null || echo "YOUR_SERVER_IP")
+    dns_port=$(jq -r '.services[] | select(.type == "resolved") | .listen_port' /etc/sing-box/config.json 2>/dev/null)
+    dns_port=${dns_port:-53}
+
+    echo -e "${CYAN}DNS 服务器地址:${NC} ${GREEN}$server_ip${NC}"
+    echo -e "${CYAN}DNS 端口:${NC} ${GREEN}$dns_port${NC}\n"
+
+    echo -e "${YELLOW}═══ Windows 配置 ═══${NC}"
+    echo -e "1. 打开 ${CYAN}控制面板 → 网络和 Internet → 网络连接${NC}"
+    echo -e "2. 右键点击网络适配器 → ${CYAN}属性${NC}"
+    echo -e "3. 选择 ${CYAN}Internet 协议版本 4 (TCP/IPv4)${NC} → ${CYAN}属性${NC}"
+    echo -e "4. 选择 ${CYAN}使用下面的 DNS 服务器地址${NC}"
+    echo -e "5. 首选 DNS 服务器: ${GREEN}$server_ip${NC}\n"
+
+    echo -e "${YELLOW}═══ macOS 配置 ═══${NC}"
+    echo -e "1. 打开 ${CYAN}系统偏好设置 → 网络${NC}"
+    echo -e "2. 选择当前网络 → ${CYAN}高级${NC}"
+    echo -e "3. 选择 ${CYAN}DNS${NC} 标签"
+    echo -e "4. 点击 ${CYAN}+${NC} 添加 DNS 服务器: ${GREEN}$server_ip${NC}\n"
+
+    echo -e "${YELLOW}═══ Linux 配置 ═══${NC}"
+    echo -e "编辑 ${CYAN}/etc/resolv.conf${NC}:"
+    echo -e "${GREEN}nameserver $server_ip${NC}\n"
+
+    echo -e "${YELLOW}═══ iOS/iPadOS 配置 ═══${NC}"
+    echo -e "1. 打开 ${CYAN}设置 → Wi-Fi${NC}"
+    echo -e "2. 点击已连接网络的 ${CYAN}(i)${NC} 图标"
+    echo -e "3. 选择 ${CYAN}配置 DNS → 手动${NC}"
+    echo -e "4. 添加服务器: ${GREEN}$server_ip${NC}\n"
+
+    echo -e "${YELLOW}═══ Android 配置 ═══${NC}"
+    echo -e "1. 打开 ${CYAN}设置 → 网络和互联网 → Wi-Fi${NC}"
+    echo -e "2. 长按已连接网络 → ${CYAN}修改网络${NC}"
+    echo -e "3. ${CYAN}高级选项 → IP 设置 → 静态${NC}"
+    echo -e "4. DNS 1: ${GREEN}$server_ip${NC}\n"
+
+    echo -e "${YELLOW}═══ 路由器配置 (推荐) ═══${NC}"
+    echo -e "在路由器管理界面设置 DHCP 的 DNS 服务器为: ${GREEN}$server_ip${NC}"
+    echo -e "这样所有连接到路由器的设备都会自动使用 DNS 解锁\n"
+
+    echo -e "${YELLOW}═══ 验证配置 ═══${NC}"
+    echo -e "Windows: ${CYAN}nslookup netflix.com${NC}"
+    echo -e "macOS/Linux: ${CYAN}dig netflix.com${NC}"
+    echo -e "应该看到解析结果来自 ${GREEN}$server_ip${NC}\n"
+}
+
 # Function to view configuration
 view_config() {
     if [[ ! -f /etc/sing-box/config.json ]]; then
@@ -2443,17 +3727,20 @@ show_menu() {
     echo -e "  ${CYAN}9)${NC} 密码设置"
     echo -e "  ${CYAN}10)${NC} ShadowTLS 设置"
     echo -e "  ${CYAN}11)${NC} Shadowsocks 设置"
-    echo -e "  ${CYAN}12)${NC} DNS 设置\n"
-    
+    echo -e "  ${CYAN}12)${NC} DNS 设置"
+    echo -e "  ${CYAN}13)${NC} 流媒体解锁设置 ${YELLOW}(类似 SNI Proxy + smartdns)${NC}"
+    echo -e "  ${CYAN}14)${NC} DNS 分流配置 ${YELLOW}(按平台配置不同 DNS)${NC}"
+    echo -e "  ${CYAN}15)${NC} 纯 DNS 解锁服务器 ${YELLOW}(不代理流量)${NC}\n"
+
     # 系统工具
     echo -e "${GREEN} 系统工具${NC}"
-    echo -e "  ${CYAN}13)${NC} 健康检查"
-    echo -e "  ${CYAN}14)${NC} 系统优化"
-    echo -e "  ${CYAN}15)${NC} 备份配置"
-    echo -e "  ${CYAN}16)${NC} 恢复配置\n"
-    
+    echo -e "  ${CYAN}16)${NC} 健康检查"
+    echo -e "  ${CYAN}17)${NC} 系统优化"
+    echo -e "  ${CYAN}18)${NC} 备份配置"
+    echo -e "  ${CYAN}19)${NC} 恢复配置\n"
+
     echo -e "  ${CYAN}0)${NC} 退出\n"
-    echo -ne "${YELLOW}请选择 [0-16]: ${NC}"
+    echo -ne "${YELLOW}请选择 [0-19]: ${NC}"
 }
 
 # Function to display port submenu
@@ -2588,15 +3875,24 @@ main() {
                 show_dns_menu
                 ;;
             13)
-                health_check
+                configure_streaming_unlock
                 ;;
             14)
-                optimize_system
+                configure_dns_routing
                 ;;
             15)
-                backup_config
+                configure_dns_unlock_server
                 ;;
             16)
+                health_check
+                ;;
+            17)
+                optimize_system
+                ;;
+            18)
+                backup_config
+                ;;
+            19)
                 restore_config
                 ;;
             0)
