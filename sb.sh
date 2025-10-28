@@ -3007,6 +3007,90 @@ deploy_dns_unlock_server() {
     read -p "监听端口 [默认: 53]: " listen_port
     listen_port=${listen_port:-53}
 
+    # 检查端口冲突
+    echo -e "\n${CYAN}检查端口冲突...${NC}"
+    local port_conflict=false
+    local conflicting_service=""
+
+    # 检查端口是否被占用
+    if command -v ss &> /dev/null; then
+        if ss -tulnp | grep -q ":$listen_port "; then
+            port_conflict=true
+            conflicting_service=$(ss -tulnp | grep ":$listen_port " | awk '{print $7}' | head -1)
+        fi
+    elif command -v netstat &> /dev/null; then
+        if netstat -tulnp | grep -q ":$listen_port "; then
+            port_conflict=true
+            conflicting_service=$(netstat -tulnp | grep ":$listen_port " | awk '{print $7}' | head -1)
+        fi
+    fi
+
+    # 如果端口被占用，尝试解决
+    if [[ $port_conflict == true ]]; then
+        echo -e "${RED}✗ 端口 $listen_port 已被占用${NC}"
+        echo -e "${YELLOW}占用程序: $conflicting_service${NC}\n"
+
+        # 检查是否是 systemd-resolved
+        if systemctl is-active --quiet systemd-resolved && [[ $listen_port == 53 ]]; then
+            echo -e "${YELLOW}检测到 systemd-resolved 正在运行${NC}"
+            echo -e "${CYAN}systemd-resolved 默认占用 53 端口，需要停止才能使用 sing-box DNS${NC}\n"
+            read -p "是否自动停止 systemd-resolved? [Y/n]: " stop_resolved
+            stop_resolved=${stop_resolved:-Y}
+
+            if [[ $stop_resolved =~ ^[Yy]$ ]]; then
+                echo -e "${CYAN}正在停止 systemd-resolved...${NC}"
+                systemctl stop systemd-resolved
+                systemctl disable systemd-resolved
+
+                # 修改 /etc/resolv.conf
+                if [[ -L /etc/resolv.conf ]]; then
+                    rm /etc/resolv.conf
+                    echo "nameserver 1.1.1.1" > /etc/resolv.conf
+                    echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+                fi
+
+                echo -e "${GREEN}✓ systemd-resolved 已停止${NC}"
+            else
+                echo -e "${YELLOW}已取消部署${NC}"
+                return 1
+            fi
+        # 检查是否是 dnsmasq
+        elif systemctl is-active --quiet dnsmasq 2>/dev/null && [[ $listen_port == 53 ]]; then
+            echo -e "${YELLOW}检测到 dnsmasq 正在运行${NC}\n"
+            read -p "是否自动停止 dnsmasq? [Y/n]: " stop_dnsmasq
+            stop_dnsmasq=${stop_dnsmasq:-Y}
+
+            if [[ $stop_dnsmasq =~ ^[Yy]$ ]]; then
+                systemctl stop dnsmasq
+                systemctl disable dnsmasq
+                echo -e "${GREEN}✓ dnsmasq 已停止${NC}"
+            else
+                echo -e "${YELLOW}已取消部署${NC}"
+                return 1
+            fi
+        # 检查是否是 BIND
+        elif (systemctl is-active --quiet named 2>/dev/null || systemctl is-active --quiet bind9 2>/dev/null) && [[ $listen_port == 53 ]]; then
+            echo -e "${YELLOW}检测到 BIND DNS 服务器正在运行${NC}\n"
+            read -p "是否自动停止 BIND? [Y/n]: " stop_bind
+            stop_bind=${stop_bind:-Y}
+
+            if [[ $stop_bind =~ ^[Yy]$ ]]; then
+                systemctl stop named 2>/dev/null || systemctl stop bind9 2>/dev/null
+                systemctl disable named 2>/dev/null || systemctl disable bind9 2>/dev/null
+                echo -e "${GREEN}✓ BIND 已停止${NC}"
+            else
+                echo -e "${YELLOW}已取消部署${NC}"
+                return 1
+            fi
+        else
+            echo -e "${RED}端口被其他程序占用，无法自动解决${NC}"
+            echo -e "${YELLOW}请手动停止占用程序或选择其他端口${NC}"
+            return 1
+        fi
+    else
+        echo -e "${GREEN}✓ 端口 $listen_port 可用${NC}"
+    fi
+
     # 检测是否已有 DNS 解锁配置
     local has_unlock_dns=false
     local unlock_dns_server=""
@@ -3608,16 +3692,130 @@ EOF
 
     # 创建日志目录
     mkdir -p /var/log/sing-box
+    mkdir -p /var/lib/sing-box
+
+    # 检查并配置 sing-box 用户权限
+    echo -e "\n${CYAN}配置服务权限...${NC}"
+
+    # 检查 systemd 服务文件中的用户配置
+    if [[ -f /etc/systemd/system/sing-box.service ]]; then
+        local service_user=$(grep "^User=" /etc/systemd/system/sing-box.service | cut -d'=' -f2)
+
+        if [[ -n "$service_user" && "$service_user" != "root" ]]; then
+            # 如果使用非 root 用户且监听特权端口（< 1024）
+            if [[ $listen_port -lt 1024 ]]; then
+                echo -e "${YELLOW}⚠ 检测到服务使用非 root 用户 ($service_user) 运行${NC}"
+                echo -e "${YELLOW}监听端口 $listen_port 需要 root 权限${NC}\n"
+                echo -e "${CYAN}解决方案:${NC}"
+                echo -e "  ${CYAN}1)${NC} 使用 root 用户运行服务 ${GREEN}(推荐)${NC}"
+                echo -e "  ${CYAN}2)${NC} 为 sing-box 添加 CAP_NET_BIND_SERVICE 权限"
+                echo -e "  ${CYAN}3)${NC} 更改监听端口为 >= 1024\n"
+
+                read -p "请选择 [1-3, 默认: 1]: " permission_choice
+                permission_choice=${permission_choice:-1}
+
+                case $permission_choice in
+                    1)
+                        echo -e "${CYAN}修改服务为 root 用户运行...${NC}"
+                        sed -i '/^User=/d' /etc/systemd/system/sing-box.service
+                        sed -i '/^Group=/d' /etc/systemd/system/sing-box.service
+                        systemctl daemon-reload
+                        echo -e "${GREEN}✓ 已配置为 root 用户运行${NC}"
+                        ;;
+                    2)
+                        echo -e "${CYAN}添加 CAP_NET_BIND_SERVICE 权限...${NC}"
+                        setcap 'cap_net_bind_service=+ep' $(which sing-box)
+                        echo -e "${GREEN}✓ 已添加权限${NC}"
+                        ;;
+                    3)
+                        echo -e "${YELLOW}请重新运行脚本并选择端口 >= 1024${NC}"
+                        return 1
+                        ;;
+                esac
+            fi
+
+            # 设置文件权限
+            chown -R $service_user:$service_user /var/log/sing-box 2>/dev/null || true
+            chown -R $service_user:$service_user /var/lib/sing-box 2>/dev/null || true
+            chown -R $service_user:$service_user /etc/sing-box 2>/dev/null || true
+        fi
+    fi
+
+    # 检查防火墙（在服务启动前）
+    local firewall_configured=false
+
+    # 检查 UFW
+    if command -v ufw &> /dev/null && ufw status | grep -q "Status: active"; then
+        echo -e "\n${YELLOW}⚠ 检测到 UFW 防火墙已启用${NC}"
+        read -p "是否自动开放 DNS 端口 $listen_port? [Y/n]: " open_port_ufw
+        open_port_ufw=${open_port_ufw:-Y}
+
+        if [[ $open_port_ufw =~ ^[Yy]$ ]]; then
+            ufw allow $listen_port/udp comment "sing-box DNS" >/dev/null 2>&1
+            ufw allow $listen_port/tcp comment "sing-box DNS" >/dev/null 2>&1
+            echo -e "${GREEN}✓ UFW: 已开放端口 $listen_port${NC}"
+            firewall_configured=true
+        fi
+    fi
+
+    # 检查 firewalld
+    if command -v firewall-cmd &> /dev/null && systemctl is-active --quiet firewalld; then
+        echo -e "\n${YELLOW}⚠ 检测到 firewalld 防火墙已启用${NC}"
+        read -p "是否自动开放 DNS 端口 $listen_port? [Y/n]: " open_port_firewalld
+        open_port_firewalld=${open_port_firewalld:-Y}
+
+        if [[ $open_port_firewalld =~ ^[Yy]$ ]]; then
+            firewall-cmd --permanent --add-port=$listen_port/udp >/dev/null 2>&1
+            firewall-cmd --permanent --add-port=$listen_port/tcp >/dev/null 2>&1
+            firewall-cmd --reload >/dev/null 2>&1
+            echo -e "${GREEN}✓ firewalld: 已开放端口 $listen_port${NC}"
+            firewall_configured=true
+        fi
+    fi
 
     # 重启服务
     echo -e "\n${CYAN}重启 sing-box 服务...${NC}"
     systemctl restart sing-box
 
+    # 等待服务启动
+    sleep 2
+
+    # 检查服务状态
     if systemctl is-active --quiet sing-box; then
-        echo -e "${GREEN}✓ DNS 解锁服务器部署成功！${NC}\n"
+        echo -e "${GREEN}✓ sing-box 服务已启动${NC}"
+
+        # 验证端口监听
+        echo -e "${CYAN}验证端口监听...${NC}"
+        sleep 1
+
+        local port_listening=false
+        if command -v ss &> /dev/null; then
+            if ss -tulnp | grep -q ":$listen_port "; then
+                port_listening=true
+            fi
+        elif command -v netstat &> /dev/null; then
+            if netstat -tulnp | grep -q ":$listen_port "; then
+                port_listening=true
+            fi
+        fi
+
+        if [[ $port_listening == true ]]; then
+            echo -e "${GREEN}✓ DNS 服务器正在监听端口 $listen_port${NC}"
+            echo -e "${GREEN}✓ DNS 解锁服务器部署成功！${NC}\n"
+        else
+            echo -e "${RED}✗ 警告: 服务已启动但端口 $listen_port 未监听${NC}"
+            echo -e "${YELLOW}可能的原因:${NC}"
+            echo -e "  1. 配置文件中的监听地址/端口不正确"
+            echo -e "  2. 权限不足（需要 root 或 CAP_NET_BIND_SERVICE）"
+            echo -e "  3. 端口仍被其他程序占用\n"
+            echo -e "${YELLOW}诊断命令:${NC}"
+            echo -e "  ${CYAN}systemctl status sing-box${NC}"
+            echo -e "  ${CYAN}journalctl -u sing-box -n 50${NC}"
+            echo -e "  ${CYAN}ss -tulnp | grep :$listen_port${NC}\n"
+        fi
 
         # 显示服务器信息
-        server_ip=$(curl -s https://api.ipify.org 2>/dev/null || echo "获取失败")
+        server_ip=$(curl -s https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}' || echo "获取失败")
 
         echo -e "${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
         echo -e "${BLUE}║${NC}  ${YELLOW}DNS 解锁服务器信息${NC}                              ${BLUE}║${NC}"
@@ -3672,22 +3870,67 @@ EOF
         echo -e "  ${CYAN}nslookup netflix.com $server_ip${NC}"
         echo -e "  ${CYAN}dig @$server_ip netflix.com${NC}\n"
 
-        # 检查防火墙
-        if command -v ufw &> /dev/null && ufw status | grep -q "Status: active"; then
-            echo -e "${YELLOW}⚠ 检测到 UFW 防火墙已启用${NC}"
-            read -p "是否自动开放 DNS 端口 $listen_port? [Y/n]: " open_port
-            open_port=${open_port:-Y}
-
-            if [[ $open_port =~ ^[Yy]$ ]]; then
-                ufw allow $listen_port/udp comment "sing-box DNS"
-                ufw allow $listen_port/tcp comment "sing-box DNS"
-                echo -e "${GREEN}✓ 已开放端口 $listen_port${NC}"
-            fi
-        fi
-
     else
-        echo -e "${RED}✗ 服务启动失败${NC}"
-        echo -e "${YELLOW}查看日志: journalctl -u sing-box -n 50${NC}"
+        echo -e "${RED}✗ 服务启动失败${NC}\n"
+
+        # 显示详细的错误诊断
+        echo -e "${YELLOW}正在诊断问题...${NC}\n"
+
+        # 1. 检查服务状态
+        echo -e "${CYAN}[1/5] 服务状态:${NC}"
+        systemctl status sing-box --no-pager -l | head -n 15
+        echo ""
+
+        # 2. 检查最近的日志
+        echo -e "${CYAN}[2/5] 最近的错误日志:${NC}"
+        journalctl -u sing-box -n 20 --no-pager | grep -i "error\|failed\|fatal" || echo "  无明显错误"
+        echo ""
+
+        # 3. 检查端口占用
+        echo -e "${CYAN}[3/5] 端口占用情况:${NC}"
+        if command -v ss &> /dev/null; then
+            ss -tulnp | grep ":$listen_port " || echo "  端口 $listen_port 未被占用"
+        fi
+        echo ""
+
+        # 4. 检查配置文件
+        echo -e "${CYAN}[4/5] 配置文件验证:${NC}"
+        if sing-box check -c /etc/sing-box/config.json 2>&1 | head -n 10; then
+            echo "  配置文件语法正确"
+        fi
+        echo ""
+
+        # 5. 检查权限
+        echo -e "${CYAN}[5/5] 文件权限:${NC}"
+        ls -la /etc/sing-box/config.json 2>/dev/null || echo "  配置文件不存在"
+        echo ""
+
+        # 提供解决建议
+        echo -e "${YELLOW}╔═══════════════════════════════════════════════════════╗${NC}"
+        echo -e "${YELLOW}║${NC}  ${RED}常见问题解决方案${NC}                                ${YELLOW}║${NC}"
+        echo -e "${YELLOW}╚═══════════════════════════════════════════════════════╝${NC}\n"
+
+        echo -e "${CYAN}1. 如果提示权限错误 (217/USER):${NC}"
+        echo -e "   ${GREEN}解决方案:${NC} 修改 systemd 服务文件使用 root 用户"
+        echo -e "   ${CYAN}命令:${NC} sed -i '/^User=/d' /etc/systemd/system/sing-box.service"
+        echo -e "   ${CYAN}命令:${NC} systemctl daemon-reload && systemctl restart sing-box\n"
+
+        echo -e "${CYAN}2. 如果端口被占用:${NC}"
+        echo -e "   ${GREEN}解决方案:${NC} 停止占用端口的服务"
+        echo -e "   ${CYAN}命令:${NC} systemctl stop systemd-resolved"
+        echo -e "   ${CYAN}命令:${NC} systemctl disable systemd-resolved\n"
+
+        echo -e "${CYAN}3. 如果配置文件错误:${NC}"
+        echo -e "   ${GREEN}解决方案:${NC} 检查配置文件语法"
+        echo -e "   ${CYAN}命令:${NC} sing-box check -c /etc/sing-box/config.json"
+        echo -e "   ${CYAN}命令:${NC} jq . /etc/sing-box/config.json\n"
+
+        echo -e "${CYAN}4. 查看完整日志:${NC}"
+        echo -e "   ${CYAN}命令:${NC} journalctl -u sing-box -f\n"
+
+        echo -e "${CYAN}5. 重新部署:${NC}"
+        echo -e "   ${GREEN}建议:${NC} 返回主菜单，选择选项 15 → 1 重新部署\n"
+
         return 1
     fi
 }
