@@ -3020,25 +3020,34 @@ deploy_dns_unlock_server() {
             unlock_dns_server=$(jq -r '.dns.rules[] | select(.rule_set and (.rule_set | contains(["geosite-netflix"]))) | .server' /etc/sing-box/config.json 2>/dev/null | head -1)
 
             if [[ -n "$unlock_dns_server" && "$unlock_dns_server" != "null" ]]; then
-                echo -e "\n${GREEN}✓ 检测到本机已配置的 DNS 解锁服务器: $unlock_dns_server${NC}"
-
-                # 获取 DNS 服务器详细信息用于显示
+                # 获取 DNS 服务器详细信息
                 local dns_info=$(jq -r ".dns.servers[] | select(.tag == \"$unlock_dns_server\")" /etc/sing-box/config.json 2>/dev/null)
                 if [[ -n "$dns_info" && "$dns_info" != "null" ]]; then
                     local dns_type=$(echo "$dns_info" | jq -r '.type')
-                    local dns_server=$(echo "$dns_info" | jq -r '.server')
-                    echo -e "${CYAN}  类型: $dns_type${NC}"
-                    echo -e "${CYAN}  服务器: $dns_server${NC}"
-                fi
 
-                echo -e "\n${YELLOW}是否使用此解锁 DNS 作为上游（嵌套解锁）?${NC}"
-                echo -e "${YELLOW}说明: 可以为其他服务器提供 DNS 解锁服务${NC}"
-                echo -e "${RED}注意: 此行为可能违反某些服务商的 TOS${NC}"
-                read -p "[Y/n]: " use_local_unlock
-                use_local_unlock=${use_local_unlock:-Y}
+                    # 过滤掉 FakeIP 类型的 DNS 服务器
+                    if [[ "$dns_type" == "fakeip" ]]; then
+                        echo -e "\n${YELLOW}⚠ 检测到 FakeIP 配置，但 FakeIP 不能作为上游 DNS 服务器${NC}"
+                        echo -e "${CYAN}提示: FakeIP 用于加速分流，不是真实的 DNS 服务器${NC}"
+                        has_unlock_dns=false
+                        unlock_dns_server=""
+                    else
+                        # 只有真实的 DNS 服务器才显示
+                        local dns_server=$(echo "$dns_info" | jq -r '.server')
+                        echo -e "\n${GREEN}✓ 检测到本机已配置的 DNS 解锁服务器: $unlock_dns_server${NC}"
+                        echo -e "${CYAN}  类型: $dns_type${NC}"
+                        echo -e "${CYAN}  服务器: $dns_server${NC}"
 
-                if [[ $use_local_unlock =~ ^[Yy]$ ]]; then
-                    use_detected_dns=true
+                        echo -e "\n${YELLOW}是否使用此解锁 DNS 作为上游（嵌套解锁）?${NC}"
+                        echo -e "${YELLOW}说明: 可以为其他服务器提供 DNS 解锁服务${NC}"
+                        echo -e "${RED}注意: 此行为可能违反某些服务商的 TOS${NC}"
+                        read -p "[Y/n]: " use_local_unlock
+                        use_local_unlock=${use_local_unlock:-Y}
+
+                        if [[ $use_local_unlock =~ ^[Yy]$ ]]; then
+                            use_detected_dns=true
+                        fi
+                    fi
                 fi
             fi
         fi
@@ -3054,6 +3063,7 @@ deploy_dns_unlock_server() {
     if [[ $use_detected_dns == false ]]; then
         echo -e "\n${YELLOW}是否使用其他服务器的解锁 DNS 作为上游（嵌套解锁）?${NC}"
         echo -e "${CYAN}例如: 使用另一台已配置解锁的服务器的 DNS${NC}"
+        echo -e "${CYAN}提示: 请先输入 y 或 n，然后在下一步输入服务器地址${NC}"
         read -p "[y/N]: " use_other_unlock
         use_other_unlock=${use_other_unlock:-N}
 
@@ -3578,8 +3588,8 @@ EOF
         echo -e "  公共 DNS: ${GREEN}$dns_names${NC}"
     fi
 
-    echo -e "  FakeIP: $([ "$enable_fakeip" = "Y" ] && echo "${GREEN}已启用${NC}" || echo "${YELLOW}未启用${NC}")"
-    echo -e "  广告拦截: $([ "$enable_adblock" = "Y" ] && echo "${GREEN}已启用${NC}" || echo "${YELLOW}未启用${NC}")"
+    echo -e "  FakeIP: $([[ $enable_fakeip =~ ^[Yy]$ ]] && echo "${GREEN}已启用${NC}" || echo "${YELLOW}未启用${NC}")"
+    echo -e "  广告拦截: $([[ $enable_adblock =~ ^[Yy]$ ]] && echo "${GREEN}已启用${NC}" || echo "${YELLOW}未启用${NC}")"
 
     # 验证配置
     echo -e "\n${CYAN}验证配置文件...${NC}"
@@ -3641,8 +3651,8 @@ EOF
             echo -e "${CYAN}公共 DNS:${NC} $dns_list"
         fi
 
-        echo -e "${CYAN}FakeIP:${NC} $([ "$enable_fakeip" = "Y" ] && echo "已启用" || echo "未启用")"
-        echo -e "${CYAN}广告拦截:${NC} $([ "$enable_adblock" = "Y" ] && echo "已启用" || echo "未启用")"
+        echo -e "${CYAN}FakeIP:${NC} $([[ $enable_fakeip =~ ^[Yy]$ ]] && echo "已启用" || echo "未启用")"
+        echo -e "${CYAN}广告拦截:${NC} $([[ $enable_adblock =~ ^[Yy]$ ]] && echo "已启用" || echo "未启用")"
         echo -e "\n${YELLOW}客户端配置:${NC}"
         echo -e "  将设备的 DNS 设置为: ${GREEN}$server_ip${NC}"
 
@@ -3744,26 +3754,68 @@ test_dns_server() {
 
     echo -e "${CYAN}开始测试...${NC}\n"
 
+    local success_count=0
+    local fail_count=0
+
     for domain in "${test_domains[@]}"; do
         echo -e "${YELLOW}测试: $domain${NC}"
 
         if command -v dig &> /dev/null; then
-            result=$(dig @$server_ip -p $dns_port $domain +short 2>/dev/null | head -n 3)
-            if [[ -n "$result" ]]; then
+            # 使用临时文件捕获完整输出
+            local temp_output=$(mktemp)
+            dig @$server_ip -p $dns_port $domain +short > "$temp_output" 2>&1
+            local exit_code=$?
+            local result=$(cat "$temp_output")
+            rm -f "$temp_output"
+
+            # 检查是否有连接错误
+            if echo "$result" | grep -q "connection refused"; then
+                echo -e "${RED}✗ 连接失败: DNS 服务器未在 $dns_port 端口监听${NC}"
+                echo -e "${YELLOW}  提示: 请检查 sing-box 服务是否正常运行${NC}"
+                ((fail_count++))
+            elif echo "$result" | grep -q "connection timed out\|no servers could be reached"; then
+                echo -e "${RED}✗ 连接超时: 无法连接到 DNS 服务器${NC}"
+                echo -e "${YELLOW}  提示: 请检查防火墙设置和网络连接${NC}"
+                ((fail_count++))
+            elif [[ -n "$result" ]] && [[ $exit_code -eq 0 ]]; then
                 echo -e "${GREEN}✓ 解析成功:${NC}"
-                echo "$result" | while read line; do
+                echo "$result" | head -n 3 | while read line; do
                     echo -e "  ${CYAN}$line${NC}"
                 done
+                ((success_count++))
             else
-                echo -e "${RED}✗ 解析失败${NC}"
+                echo -e "${RED}✗ 解析失败: 未返回有效结果${NC}"
+                ((fail_count++))
             fi
         else
-            nslookup $domain $server_ip 2>/dev/null | grep -A 2 "Name:" | tail -n 2
+            # 使用 nslookup
+            local ns_result=$(nslookup $domain $server_ip 2>&1)
+            if echo "$ns_result" | grep -q "connection refused"; then
+                echo -e "${RED}✗ 连接失败: DNS 服务器未在 $dns_port 端口监听${NC}"
+                ((fail_count++))
+            elif echo "$ns_result" | grep -q "Name:"; then
+                echo -e "${GREEN}✓ 解析成功:${NC}"
+                echo "$ns_result" | grep -A 2 "Name:" | tail -n 2
+                ((success_count++))
+            else
+                echo -e "${RED}✗ 解析失败${NC}"
+                ((fail_count++))
+            fi
         fi
         echo ""
     done
 
-    echo -e "${GREEN}测试完成${NC}"
+    echo -e "${CYAN}测试完成${NC}"
+    echo -e "成功: ${GREEN}$success_count${NC} | 失败: ${RED}$fail_count${NC}"
+
+    # 如果全部失败，给出诊断建议
+    if [[ $success_count -eq 0 ]]; then
+        echo -e "\n${RED}所有测试均失败，请检查以下项目:${NC}"
+        echo -e "  1. sing-box 服务状态: ${CYAN}systemctl status sing-box${NC}"
+        echo -e "  2. 端口监听情况: ${CYAN}ss -tulnp | grep :$dns_port${NC}"
+        echo -e "  3. 配置文件验证: ${CYAN}sing-box check -c /etc/sing-box/config.json${NC}"
+        echo -e "  4. 查看服务日志: ${CYAN}journalctl -u sing-box -n 50${NC}"
+    fi
 }
 
 # Function to generate client DNS configuration guide
