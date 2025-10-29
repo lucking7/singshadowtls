@@ -3623,6 +3623,7 @@ EOF
       }
     ],
     "auto_detect_interface": true,
+    "default_domain_resolver": "dns_local",
     "final": "direct"
   },
   "outbounds": [
