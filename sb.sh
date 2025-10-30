@@ -13,7 +13,7 @@ CYAN='\033[0;36m'   # Secondary/Information/Options
 NC='\033[0m'      # No Color
 
 # 版本信息
-SCRIPT_VERSION="3.2"
+SCRIPT_VERSION="3.3"
 SCRIPT_NAME="Sing-Box & ShadowTLS Multi-Deployment Script"
 
 # 日志配置
@@ -1261,7 +1261,7 @@ INNER_EOF
             {
                 "tag": "dns_block",
                 "type": "hosts",
-                "mapping": {}
+                "predefined": {}
             }
         ],
         "strategy": "$default_strategy",
@@ -3451,7 +3451,7 @@ EOF
       {
         "tag": "dns_block",
         "type": "hosts",
-        "mapping": {}
+        "predefined": {}
       }
     ],
     "strategy": "prefer_ipv4",
