@@ -4,13 +4,13 @@
 # File: install_sniproxy.sh
 # Description: SNI Proxy 自动化安装和配置脚本，支持流媒体解锁规则自动提取
 # Maintainer: lucking7@github.com
-# Version: 1.0.5
+# Version: 1.0.6
 # Requires: Bash 4.0+, curl, jq, git (CentOS需要), autotools (CentOS需要)
 
 set -Eeuo pipefail
 
 # 版本与元信息
-readonly SCRIPT_VERSION="1.0.5"
+readonly SCRIPT_VERSION="1.0.6"
 readonly MAINTAINER="lucking7@github.com"
 readonly REQUIRES_BASH="4.0+"
 readonly SCRIPT_BASENAME="$(basename "$0")"
@@ -36,17 +36,23 @@ BACKUP_DIR="/etc/sniproxy_backup_$(date +%Y%m%d_%H%M%S)"
 readonly SNIPROXY_CONF="/etc/sniproxy.conf"
 readonly LOG_FILE="/var/log/sniproxy_install.log"
 
+# 运行时变量
+SNIPROXY_BIN=""                                    # sniproxy 可执行文件路径
+NON_INTERACTIVE="${SNIPROXY_NON_INTERACTIVE:-}"   # 非交互式模式
+AUTO_CONFIRM="${SNIPROXY_AUTO_CONFIRM:-}"         # 自动确认
+SELECTED_SERVICES="${SNIPROXY_SERVICES:-}"        # 预设服务列表
+ALL_SERVICES=false                                 # 是否选择所有服务
+
 # 规则库 URL 映射
-declare -A RULE_URLS=(
-    ["Netflix"]="https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/netflix.json"
-    ["Disney+"]="https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/disney.json"
-    ["OpenAI"]="https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/openai.json"
-    ["AI服务"]="https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/category-ai-!cn.json"
-    ["Amazon Prime"]="https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/primevideo.json"
-    ["YouTube"]="https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/youtube.json"
-    ["HBO"]="https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/hbo.json"
-    ["Hulu"]="https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/hulu.json"
-)
+declare -A RULE_URLS
+RULE_URLS["Netflix"]="https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/netflix.json"
+RULE_URLS["Disney+"]="https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/disney.json"
+RULE_URLS["OpenAI"]="https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/openai.json"
+RULE_URLS["AI服务"]="https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/category-ai-!cn.json"
+RULE_URLS["Amazon Prime"]="https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/primevideo.json"
+RULE_URLS["YouTube"]="https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/youtube.json"
+RULE_URLS["HBO"]="https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/hbo.json"
+RULE_URLS["Hulu"]="https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/hulu.json"
 
 # 清理函数（遵循 R4.6.2）
 cleanup_temp_files() {
@@ -74,6 +80,86 @@ on_error() {
 # 设置 trap（遵循 R4.6.2）
 trap cleanup_temp_files EXIT
 trap 'on_error $? $LINENO' ERR
+
+# 显示帮助信息
+show_help() {
+  cat << EOF
+SNI Proxy 自动化安装和配置脚本 v${SCRIPT_VERSION}
+
+用法: $SCRIPT_BASENAME [选项]
+
+选项:
+  -h, --help              显示此帮助信息
+  -y, --yes               自动确认所有提示
+  -n, --non-interactive   非交互式模式(需要指定服务)
+  -a, --all-services      安装所有服务
+  -s, --services SERVICES 指定要安装的服务(逗号分隔)
+                          可用服务: Netflix, Disney+, OpenAI, AI服务,
+                                   Amazon Prime, YouTube, HBO, Hulu
+
+环境变量:
+  SNIPROXY_NON_INTERACTIVE=1    启用非交互式模式
+  SNIPROXY_AUTO_CONFIRM=1       自动确认所有提示
+  SNIPROXY_SERVICES="..."       预设服务列表(逗号分隔)
+
+示例:
+  # 交互式安装
+  sudo $SCRIPT_BASENAME
+
+  # 非交互式安装所有服务
+  sudo $SCRIPT_BASENAME --yes --all-services
+
+  # 安装指定服务
+  sudo $SCRIPT_BASENAME -y -s "Netflix,Disney+,OpenAI"
+
+  # 使用环境变量
+  SNIPROXY_SERVICES="Netflix,YouTube" sudo $SCRIPT_BASENAME -y
+
+EOF
+  exit 0
+}
+
+# 解析命令行参数
+parse_arguments() {
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      -h|--help)
+        show_help
+        ;;
+      -y|--yes)
+        AUTO_CONFIRM=1
+        shift
+        ;;
+      -n|--non-interactive)
+        NON_INTERACTIVE=1
+        shift
+        ;;
+      -a|--all-services)
+        ALL_SERVICES=true
+        shift
+        ;;
+      -s|--services)
+        if [[ -n "${2:-}" ]]; then
+          SELECTED_SERVICES="$2"
+          shift 2
+        else
+          log_error "选项 $1 需要参数"
+          exit 1
+        fi
+        ;;
+      *)
+        log_error "未知选项: $1"
+        echo "使用 --help 查看帮助信息"
+        exit 1
+        ;;
+    esac
+  done
+}
+
+# 检测是否为交互式环境
+is_interactive() {
+  [[ -t 0 ]] && [[ -z "$NON_INTERACTIVE" ]]
+}
 
 # 日志函数（遵循 R4.7.1）
 log() {
@@ -124,6 +210,30 @@ check_root() {
   fi
 }
 
+# 检测 sniproxy 可执行文件路径
+detect_sniproxy_path() {
+  log_info "检测 sniproxy 可执行文件路径..."
+
+  local sniproxy_path=""
+
+  # 优先使用 command -v 查找
+  if command -v sniproxy >/dev/null 2>&1; then
+    sniproxy_path=$(command -v sniproxy)
+  elif [[ -x /usr/sbin/sniproxy ]]; then
+    sniproxy_path="/usr/sbin/sniproxy"
+  elif [[ -x /usr/local/bin/sniproxy ]]; then
+    sniproxy_path="/usr/local/bin/sniproxy"
+  else
+    log_error "无法找到 sniproxy 可执行文件"
+    log_error "请确保 sniproxy 已正确安装"
+    return 1
+  fi
+
+  SNIPROXY_BIN="$sniproxy_path"
+  log_info "检测到 sniproxy 路径: $SNIPROXY_BIN"
+  return 0
+}
+
 # 检测操作系统
 detect_os() {
   local os_id=""
@@ -159,13 +269,18 @@ detect_os() {
 # 检查网络连接
 check_network() {
     log_info "检查网络连接..."
-    
+
     if ! curl -s --connect-timeout 5 https://raw.githubusercontent.com > /dev/null 2>&1; then
-        log_error "无法连接到 GitHub,请检查网络连接"
+        log_warn "无法连接到 GitHub,请检查网络连接"
         echo "提示: 如果在中国大陆,可能需要配置代理"
-        read -p "是否继续? (y/n): " continue_choice < /dev/tty
-        if [[ ! $continue_choice =~ ^[Yy]$ ]]; then
-            exit 1
+
+        if is_interactive && [[ -z "$AUTO_CONFIRM" ]]; then
+            read -p "是否继续? (y/n): " continue_choice < /dev/tty
+            if [[ ! $continue_choice =~ ^[Yy]$ ]]; then
+                exit 1
+            fi
+        else
+            log_warn "非交互式模式,继续安装..."
         fi
     else
         log "网络连接正常"
@@ -251,8 +366,11 @@ install_sniproxy() {
 # 创建 systemd 服务文件
 create_systemd_service() {
     log_info "创建 systemd 服务文件..."
-    
-    cat > /etc/systemd/system/sniproxy.service << 'EOF'
+
+    # 使用检测到的 sniproxy 路径
+    local sniproxy_exec="${SNIPROXY_BIN:-/usr/local/bin/sniproxy}"
+
+    cat > /etc/systemd/system/sniproxy.service << EOF
 [Unit]
 Description=SNI Proxy
 After=network.target
@@ -260,17 +378,17 @@ After=network.target
 [Service]
 Type=forking
 PIDFile=/var/run/sniproxy.pid
-ExecStart=/usr/local/bin/sniproxy -c /etc/sniproxy.conf
-ExecReload=/bin/kill -HUP $MAINPID
+ExecStart=${sniproxy_exec} -c /etc/sniproxy.conf
+ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
 RestartSec=5s
 
 [Install]
 WantedBy=multi-user.target
 EOF
-    
+
     systemctl daemon-reload
-    log "systemd 服务文件创建完成"
+    log "systemd 服务文件创建完成 (使用: $sniproxy_exec)"
 }
 
 # 从 JSON 提取域名
@@ -356,7 +474,7 @@ download_and_process_rules() {
     fi
 }
 
-# 用户选择服务（重构版：修复 mapfile 问题）
+# 用户选择服务（支持交互式和非交互式模式）
 select_services() {
   # 构建服务列表数组
   local -a services=()
@@ -364,54 +482,89 @@ select_services() {
     services+=("$service")
   done
 
-  # 显示菜单（直接输出到终端，不被捕获）
-  echo "" >&2
-  echo -e "${BLUE}========================================${NC}" >&2
-  echo -e "${BLUE}  请选择需要解锁的服务 (可多选)${NC}" >&2
-  echo -e "${BLUE}========================================${NC}" >&2
-  echo "" >&2
-
-  local i=1
-  for service in "${services[@]}"; do
-    echo "  [$i] $service" >&2
-    ((i++))
-  done
-
-  echo "  [A] 全部选择" >&2
-  echo "  [0] 完成选择" >&2
-  echo "" >&2
-
-  # 用户交互
   local -a selected_services=()
 
-  while true; do
-    echo -n "请输入选项 (多个选项用空格分隔): " >&2
-    read -r choices < /dev/tty
+  # 非交互式模式处理
+  if ! is_interactive || [[ -n "$NON_INTERACTIVE" ]]; then
+    log_info "非交互式模式,处理服务选择..." >&2
 
-    if [[ "$choices" =~ [Aa] ]]; then
+    # 优先级: --all-services > --services > 环境变量 SNIPROXY_SERVICES
+    if [[ "$ALL_SERVICES" == true ]]; then
       selected_services=("${services[@]}")
-      log_info "已选择全部服务" >&2
-      break
-    elif [[ "$choices" =~ 0 ]]; then
-      if [[ ${#selected_services[@]} -eq 0 ]]; then
-        log_warn "至少选择一个服务" >&2
-        continue
-      fi
-      break
-    fi
-
-    for choice in $choices; do
-      if [[ "$choice" =~ ^[0-9]+$ ]] && [[ $choice -ge 1 ]] && [[ $choice -le ${#services[@]} ]]; then
-        local service="${services[$((choice-1))]}"
-        if [[ ! " ${selected_services[@]} " =~ " ${service} " ]]; then
-          selected_services+=("$service")
-          log_info "已添加: $service" >&2
+      log_info "已选择全部服务 (--all-services)" >&2
+    elif [[ -n "$SELECTED_SERVICES" ]]; then
+      # 解析逗号分隔的服务列表
+      IFS=',' read -ra service_list <<< "$SELECTED_SERVICES"
+      for svc in "${service_list[@]}"; do
+        # 去除前后空格
+        svc=$(echo "$svc" | xargs)
+        # 验证服务是否存在
+        if [[ " ${services[@]} " =~ " ${svc} " ]]; then
+          selected_services+=("$svc")
+        else
+          log_warn "未知服务: $svc (已忽略)" >&2
         fi
-      else
-        log_warn "无效选项: $choice" >&2
+      done
+
+      if [[ ${#selected_services[@]} -eq 0 ]]; then
+        log_error "没有有效的服务被选择" >&2
+        log_error "可用服务: ${services[*]}" >&2
+        exit 1
       fi
+    else
+      log_error "非交互式模式需要指定服务" >&2
+      log_error "使用 --all-services 或 --services 'Netflix,Disney+' 或设置环境变量 SNIPROXY_SERVICES" >&2
+      exit 1
+    fi
+  else
+    # 交互式模式
+    # 显示菜单（直接输出到终端，不被捕获）
+    echo "" >&2
+    echo -e "${BLUE}========================================${NC}" >&2
+    echo -e "${BLUE}  请选择需要解锁的服务 (可多选)${NC}" >&2
+    echo -e "${BLUE}========================================${NC}" >&2
+    echo "" >&2
+
+    local i=1
+    for service in "${services[@]}"; do
+      echo "  [$i] $service" >&2
+      ((i++))
     done
-  done
+
+    echo "  [A] 全部选择" >&2
+    echo "  [0] 完成选择" >&2
+    echo "" >&2
+
+    # 用户交互
+    while true; do
+      echo -n "请输入选项 (多个选项用空格分隔): " >&2
+      read -r choices < /dev/tty
+
+      if [[ "$choices" =~ [Aa] ]]; then
+        selected_services=("${services[@]}")
+        log_info "已选择全部服务" >&2
+        break
+      elif [[ "$choices" =~ 0 ]]; then
+        if [[ ${#selected_services[@]} -eq 0 ]]; then
+          log_warn "至少选择一个服务" >&2
+          continue
+        fi
+        break
+      fi
+
+      for choice in $choices; do
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [[ $choice -ge 1 ]] && [[ $choice -le ${#services[@]} ]]; then
+          local service="${services[$((choice-1))]}"
+          if [[ ! " ${selected_services[@]} " =~ " ${service} " ]]; then
+            selected_services+=("$service")
+            log_info "已添加: $service" >&2
+          fi
+        else
+          log_warn "无效选项: $choice" >&2
+        fi
+      done
+    done
+  fi
 
   echo "" >&2
   log "已选择 ${#selected_services[@]} 个服务:" >&2
@@ -608,6 +761,13 @@ create_log_directory() {
 configure_firewall() {
     log_info "检测防火墙配置..."
 
+    # 非交互式模式跳过防火墙配置
+    if ! is_interactive || [[ -n "$NON_INTERACTIVE" ]]; then
+        log_warn "非交互式模式,跳过防火墙配置"
+        log_warn "请手动配置防火墙规则,开放 80 和 443 端口"
+        return
+    fi
+
     if ! command -v ufw &> /dev/null; then
         log_warn "未检测到 UFW 防火墙"
         read -p "是否安装 UFW? (y/n): " install_ufw < /dev/tty
@@ -686,8 +846,11 @@ configure_firewall() {
 start_sniproxy() {
     log_info "启动 SNI Proxy..."
 
+    # 使用检测到的 sniproxy 路径
+    local sniproxy_exec="${SNIPROXY_BIN:-/usr/local/bin/sniproxy}"
+
     # 测试配置文件
-    if /usr/local/bin/sniproxy -t -c "$SNIPROXY_CONF"; then
+    if "$sniproxy_exec" -t -c "$SNIPROXY_CONF"; then
         log "配置文件验证通过"
     else
         log_error "配置文件验证失败"
@@ -758,8 +921,11 @@ test_sniproxy() {
     echo -e "${BLUE}========================================${NC}"
     echo ""
 
+    # 使用检测到的 sniproxy 路径
+    local sniproxy_exec="${SNIPROXY_BIN:-/usr/local/bin/sniproxy}"
+
     log_info "测试配置文件语法..."
-    if /usr/local/bin/sniproxy -t -c "$SNIPROXY_CONF"; then
+    if "$sniproxy_exec" -t -c "$SNIPROXY_CONF"; then
         log "✓ 配置文件语法正确"
     else
         log_error "✗ 配置文件语法错误"
@@ -779,7 +945,7 @@ test_sniproxy() {
         log "✓ 端口 80 和 443 正在监听"
     else
         log_warn "✗ 端口监听异常"
-        ss -tlnp | grep sniproxy
+        ss -tlnp | grep sniproxy || true
     fi
 
     echo ""
@@ -808,6 +974,9 @@ rollback() {
 
 # 主函数
 main() {
+    # 解析命令行参数
+    parse_arguments "$@"
+
     # 设置错误处理
     trap rollback ERR
 
@@ -818,7 +987,7 @@ main() {
 ║        SNI Proxy 自动化安装和配置脚本                  ║
 ║                                                       ║
 ║  功能: 自动安装 SNI Proxy 并配置流媒体解锁规则         ║
-║  版本: 1.0.0                                          ║
+║  版本: 1.0.6                                          ║
 ║                                                       ║
 ╚═══════════════════════════════════════════════════════╝
 EOF
@@ -836,12 +1005,16 @@ EOF
     # 检查网络连接
     check_network
 
-    # 询问是否继续
-    echo ""
-    read -p "是否继续安装? (y/n): " continue_install < /dev/tty
-    if [[ ! $continue_install =~ ^[Yy]$ ]]; then
-        log_info "用户取消安装"
-        exit 0
+    # 询问是否继续(非交互式模式跳过)
+    if is_interactive && [[ -z "$AUTO_CONFIRM" ]]; then
+        echo ""
+        read -p "是否继续安装? (y/n): " continue_install < /dev/tty
+        if [[ ! $continue_install =~ ^[Yy]$ ]]; then
+            log_info "用户取消安装"
+            exit 0
+        fi
+    else
+        log_info "自动确认模式,继续安装..."
     fi
 
     # 安装依赖
@@ -849,6 +1022,9 @@ EOF
 
     # 安装 SNI Proxy
     install_sniproxy
+
+    # 检测 sniproxy 可执行文件路径
+    detect_sniproxy_path
 
     # 创建 systemd 服务
     create_systemd_service
