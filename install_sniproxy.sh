@@ -4,13 +4,13 @@
 # File: install_sniproxy.sh
 # Description: SNI Proxy 自动化安装和配置脚本，支持流媒体解锁规则自动提取
 # Maintainer: lucking7@github.com
-# Version: 1.0.2
-# Requires: Bash 4.0+, curl, jq, git, autotools
+# Version: 1.0.3
+# Requires: Bash 4.0+, curl, jq, git (CentOS需要), autotools (CentOS需要)
 
 set -Eeuo pipefail
 
 # 版本与元信息
-readonly SCRIPT_VERSION="1.0.2"
+readonly SCRIPT_VERSION="1.0.3"
 readonly MAINTAINER="lucking7@github.com"
 readonly REQUIRES_BASH="4.0+"
 readonly SCRIPT_BASENAME="$(basename "$0")"
@@ -189,32 +189,55 @@ install_dependencies() {
     log "依赖包安装完成"
 }
 
-# 编译安装 SNI Proxy
+# 安装 SNI Proxy
 install_sniproxy() {
-    log_info "开始编译安装 SNI Proxy..."
-    
-    cd "$TEMP_DIR"
-    
-    # 克隆源码
-    if [[ ! -d "sniproxy" ]]; then
+  log_info "开始安装 SNI Proxy..."
+
+  case $OS in
+    ubuntu|debian)
+      # Ubuntu/Debian 使用官方包（更快更可靠）
+      log_info "使用 apt 安装 sniproxy..."
+      apt-get update -qq
+      apt-get install -y sniproxy
+
+      # 停止默认服务（我们会用自己的配置）
+      systemctl stop sniproxy 2>/dev/null || true
+      systemctl disable sniproxy 2>/dev/null || true
+      ;;
+
+    centos|rhel|fedora)
+      # CentOS/RHEL/Fedora 需要源码编译
+      log_info "从源码编译安装 sniproxy..."
+
+      cd "$TEMP_DIR"
+
+      # 克隆源码
+      if [[ ! -d "sniproxy" ]]; then
         log_info "克隆 SNI Proxy 源码..."
         git clone https://github.com/dlundquist/sniproxy.git
-    fi
-    
-    cd sniproxy
-    
-    # 编译安装
-    log_info "配置编译环境..."
-    ./autogen.sh
-    ./configure
-    
-    log_info "编译中..."
-    make
-    
-    log_info "安装中..."
-    make install
-    
-    log "SNI Proxy 编译安装完成"
+      fi
+
+      cd sniproxy
+
+      # 编译安装
+      log_info "配置编译环境..."
+      ./autogen.sh
+      ./configure
+
+      log_info "编译中..."
+      make
+
+      log_info "安装中..."
+      make install
+      ;;
+
+    *)
+      log_error "不支持的操作系统: $OS"
+      exit 71
+      ;;
+  esac
+
+  log "SNI Proxy 安装完成"
 }
 
 # 创建 systemd 服务文件
@@ -303,75 +326,72 @@ download_and_process_rules() {
     fi
 }
 
-# 显示服务选择菜单
-show_service_menu() {
-    echo ""
-    echo -e "${BLUE}========================================${NC}"
-    echo -e "${BLUE}  请选择需要解锁的服务 (可多选)${NC}"
-    echo -e "${BLUE}========================================${NC}"
-    echo ""
-    
-    local i=1
-    local services=()
-    
-    for service in "${!RULE_URLS[@]}"; do
-        services+=("$service")
-        echo "  [$i] $service"
-        ((i++))
-    done
-    
-    echo "  [A] 全部选择"
-    echo "  [0] 完成选择"
-    echo ""
-    
-    # 返回服务列表
-    printf '%s\n' "${services[@]}"
-}
-
-# 用户选择服务
+# 用户选择服务（重构版：修复 mapfile 问题）
 select_services() {
-    local -a services
-    mapfile -t services < <(show_service_menu)
+  # 构建服务列表数组
+  local -a services=()
+  for service in "${!RULE_URLS[@]}"; do
+    services+=("$service")
+  done
 
-    local -a selected_services=()
+  # 显示菜单（直接输出到终端，不被捕获）
+  echo "" >&2
+  echo -e "${BLUE}========================================${NC}" >&2
+  echo -e "${BLUE}  请选择需要解锁的服务 (可多选)${NC}" >&2
+  echo -e "${BLUE}========================================${NC}" >&2
+  echo "" >&2
 
-    while true; do
-        echo -n "请输入选项 (多个选项用空格分隔): "
-        read -r choices < /dev/tty
+  local i=1
+  for service in "${services[@]}"; do
+    echo "  [$i] $service" >&2
+    ((i++))
+  done
 
-        if [[ "$choices" =~ [Aa] ]]; then
-            selected_services=("${services[@]}")
-            log_info "已选择全部服务"
-            break
-        elif [[ "$choices" =~ 0 ]]; then
-            if [[ ${#selected_services[@]} -eq 0 ]]; then
-                log_warn "至少选择一个服务"
-                continue
-            fi
-            break
+  echo "  [A] 全部选择" >&2
+  echo "  [0] 完成选择" >&2
+  echo "" >&2
+
+  # 用户交互
+  local -a selected_services=()
+
+  while true; do
+    echo -n "请输入选项 (多个选项用空格分隔): " >&2
+    read -r choices < /dev/tty
+
+    if [[ "$choices" =~ [Aa] ]]; then
+      selected_services=("${services[@]}")
+      log_info "已选择全部服务" >&2
+      break
+    elif [[ "$choices" =~ 0 ]]; then
+      if [[ ${#selected_services[@]} -eq 0 ]]; then
+        log_warn "至少选择一个服务" >&2
+        continue
+      fi
+      break
+    fi
+
+    for choice in $choices; do
+      if [[ "$choice" =~ ^[0-9]+$ ]] && [[ $choice -ge 1 ]] && [[ $choice -le ${#services[@]} ]]; then
+        local service="${services[$((choice-1))]}"
+        if [[ ! " ${selected_services[@]} " =~ " ${service} " ]]; then
+          selected_services+=("$service")
+          log_info "已添加: $service" >&2
         fi
-
-        for choice in $choices; do
-            if [[ "$choice" =~ ^[0-9]+$ ]] && [[ $choice -ge 1 ]] && [[ $choice -le ${#services[@]} ]]; then
-                local service="${services[$((choice-1))]}"
-                if [[ ! " ${selected_services[@]} " =~ " ${service} " ]]; then
-                    selected_services+=("$service")
-                    log_info "已添加: $service"
-                fi
-            else
-                log_warn "无效选项: $choice"
-            fi
-        done
+      else
+        log_warn "无效选项: $choice" >&2
+      fi
     done
+  done
 
-    echo ""
-    log "已选择 ${#selected_services[@]} 个服务:"
-    for service in "${selected_services[@]}"; do
-        echo "  - $service"
-    done
-    echo ""
+  echo "" >&2
+  log "已选择 ${#selected_services[@]} 个服务:" >&2
+  for service in "${selected_services[@]}"; do
+    echo "  - $service" >&2
+  done
+  echo "" >&2
 
-    printf '%s\n' "${selected_services[@]}"
+  # 只将选择的服务列表输出到 stdout（供 readarray 捕获）
+  printf '%s\n' "${selected_services[@]}"
 }
 
 # 生成 SNI Proxy 配置文件
@@ -716,9 +736,8 @@ EOF
     create_log_directory
 
     # 用户选择服务
-    echo ""
     local -a selected_services
-    mapfile -t selected_services < <(select_services)
+    readarray -t selected_services < <(select_services)
 
     # 下载规则
     echo ""
