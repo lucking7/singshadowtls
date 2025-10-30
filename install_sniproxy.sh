@@ -4,13 +4,13 @@
 # File: install_sniproxy.sh
 # Description: SNI Proxy 自动化安装和配置脚本，支持流媒体解锁规则自动提取
 # Maintainer: lucking7@github.com
-# Version: 1.0.3
+# Version: 1.0.4
 # Requires: Bash 4.0+, curl, jq, git (CentOS需要), autotools (CentOS需要)
 
 set -Eeuo pipefail
 
 # 版本与元信息
-readonly SCRIPT_VERSION="1.0.3"
+readonly SCRIPT_VERSION="1.0.4"
 readonly MAINTAINER="lucking7@github.com"
 readonly REQUIRES_BASH="4.0+"
 readonly SCRIPT_BASENAME="$(basename "$0")"
@@ -49,7 +49,7 @@ declare -A RULE_URLS=(
 )
 
 # 清理函数（遵循 R4.6.2）
-cleanup() {
+cleanup_temp_files() {
   if [[ -n "${TEMP_DIR:-}" ]] && [[ -d "$TEMP_DIR" ]]; then
     rm -rf -- "$TEMP_DIR"
   fi
@@ -60,11 +60,19 @@ on_error() {
   local exit_code=$1
   local line_number=$2
   log_error "脚本在第 $line_number 行发生错误，退出码: $exit_code"
-  cleanup
+
+  # 显示最后几行日志以帮助调试
+  if [[ -f "$LOG_FILE" ]]; then
+    echo "" >&2
+    echo "=== 最后 10 行日志 ===" >&2
+    tail -n 10 "$LOG_FILE" >&2
+  fi
+
+  cleanup_temp_files
 }
 
 # 设置 trap（遵循 R4.6.2）
-trap cleanup EXIT
+trap cleanup_temp_files EXIT
 trap 'on_error $? $LINENO' ERR
 
 # 日志函数（遵循 R4.7.1）
@@ -290,16 +298,22 @@ extract_domains_from_json() {
 
 # 转换域名为 SNI Proxy 格式
 convert_to_sniproxy_format() {
-    local domain=$1
-    
-    # 移除前导点号
-    domain="${domain#.}"
-    
-    # 转义点号
-    domain="${domain//./\\.}"
-    
-    # 添加通配符和结尾
-    echo "    .*${domain}\$ *"
+  local domain=$1
+
+  # 验证域名不为空
+  if [[ -z "$domain" ]]; then
+    log_warn "convert_to_sniproxy_format: 域名为空，跳过"
+    return 1
+  fi
+
+  # 移除前导点号
+  domain="${domain#.}"
+
+  # 转义点号（用于正则表达式）
+  domain="${domain//./\\.}"
+
+  # 添加通配符和结尾（使用 printf 避免转义问题）
+  printf '    .*%s$ *\n' "$domain"
 }
 
 # 下载并处理规则
@@ -396,19 +410,32 @@ select_services() {
 
 # 生成 SNI Proxy 配置文件
 generate_sniproxy_config() {
-    local -a selected_services=("$@")
+  local -a selected_services=("$@")
 
-    log_info "生成 SNI Proxy 配置文件..."
+  log_info "生成 SNI Proxy 配置文件..."
 
-    # 备份原有配置
-    if [[ -f "$SNIPROXY_CONF" ]]; then
-        mkdir -p "$BACKUP_DIR"
-        cp "$SNIPROXY_CONF" "$BACKUP_DIR/sniproxy.conf"
-        log_info "原配置已备份到: $BACKUP_DIR"
-    fi
+  # 验证参数
+  if [[ ${#selected_services[@]} -eq 0 ]]; then
+    log_error "generate_sniproxy_config: 没有选择任何服务"
+    return 1
+  fi
 
-    # 创建配置文件头部
-    cat > "$SNIPROXY_CONF" << 'EOF'
+  # 备份原有配置
+  if [[ -f "$SNIPROXY_CONF" ]]; then
+    mkdir -p "$BACKUP_DIR" || {
+      log_error "无法创建备份目录: $BACKUP_DIR"
+      return 1
+    }
+    cp "$SNIPROXY_CONF" "$BACKUP_DIR/sniproxy.conf" || {
+      log_error "无法备份配置文件"
+      return 1
+    }
+    log_info "原配置已备份到: $BACKUP_DIR"
+  fi
+
+  # 创建配置文件头部
+  log_info "写入配置文件头部..."
+  cat > "$SNIPROXY_CONF" << 'EOF'
 user daemon
 pidfile /var/run/sniproxy.pid
 
@@ -443,32 +470,82 @@ listener 0.0.0.0:443 {
 table {
 EOF
 
-    # 处理每个选中的服务
-    local total_domains=0
+  # 检查写入是否成功
+  if [[ ! -s "$SNIPROXY_CONF" ]]; then
+    log_error "无法写入配置文件: $SNIPROXY_CONF"
+    return 1
+  fi
 
-    for service in "${selected_services[@]}"; do
-        local url="${RULE_URLS[$service]}"
-        local json_file="$TEMP_DIR/${service// /_}.json"
+  # 处理每个选中的服务
+  local total_domains=0
 
-        if [[ -f "$json_file" ]]; then
-            echo "" >> "$SNIPROXY_CONF"
-            echo "    # $service" >> "$SNIPROXY_CONF"
+  for service in "${selected_services[@]}"; do
+    local url="${RULE_URLS[$service]}"
+    local json_file="$TEMP_DIR/${service// /_}.json"
 
-            local count=0
-            while IFS= read -r domain; do
-                convert_to_sniproxy_format "$domain" >> "$SNIPROXY_CONF"
-                ((count++))
-                ((total_domains++))
-            done < <(extract_domains_from_json "$json_file")
+    log_info "处理服务: $service"
 
-            log_info "  ✓ $service: 添加了 $count 个域名规则"
+    if [[ ! -f "$json_file" ]]; then
+      log_warn "  ✗ 规则文件不存在: $json_file，跳过"
+      continue
+    fi
+
+    # 添加服务注释
+    {
+      echo ""
+      echo "    # $service"
+    } >> "$SNIPROXY_CONF" || {
+      log_error "无法写入服务注释: $service"
+      return 1
+    }
+
+    local count=0
+    local failed_count=0
+
+    # 提取并转换域名
+    while IFS= read -r domain; do
+      if [[ -n "$domain" ]]; then
+        if convert_to_sniproxy_format "$domain" >> "$SNIPROXY_CONF"; then
+          ((count++))
+          ((total_domains++))
+        else
+          ((failed_count++))
+          log_warn "  ✗ 转换失败: $domain"
         fi
-    done
+      fi
+    done < <(extract_domains_from_json "$json_file")
 
-    # 添加配置文件尾部
-    echo "}" >> "$SNIPROXY_CONF"
+    if [[ $count -gt 0 ]]; then
+      log_info "  ✓ $service: 添加了 $count 个域名规则"
+      if [[ $failed_count -gt 0 ]]; then
+        log_warn "  ⚠ $service: $failed_count 个域名转换失败"
+      fi
+    else
+      log_warn "  ✗ $service: 没有提取到任何域名"
+    fi
+  done
 
-    log "配置文件生成完成,共添加 $total_domains 个域名规则"
+  # 添加配置文件尾部
+  log_info "写入配置文件尾部..."
+  echo "}" >> "$SNIPROXY_CONF" || {
+    log_error "无法写入配置文件尾部"
+    return 1
+  }
+
+  # 验证配置文件
+  if [[ ! -s "$SNIPROXY_CONF" ]]; then
+    log_error "配置文件为空或不存在"
+    return 1
+  fi
+
+  log "配置文件生成完成,共添加 $total_domains 个域名规则"
+  log_info "配置文件路径: $SNIPROXY_CONF"
+
+  # 显示配置文件统计
+  local line_count=$(wc -l < "$SNIPROXY_CONF")
+  log_info "配置文件总行数: $line_count"
+
+  return 0
 }
 
 # 创建日志目录
@@ -661,28 +738,24 @@ test_sniproxy() {
     log "测试完成"
 }
 
-# 清理临时文件
-cleanup() {
-    log_info "清理临时文件..."
-    rm -rf "$TEMP_DIR"
-    log "清理完成"
-}
-
 # 错误处理和回滚
 rollback() {
-    log_error "安装过程中出现错误,正在回滚..."
+  log_error "安装过程中出现错误,正在回滚..."
 
-    if [[ -d "$BACKUP_DIR" ]] && [[ -f "$BACKUP_DIR/sniproxy.conf" ]]; then
-        cp "$BACKUP_DIR/sniproxy.conf" "$SNIPROXY_CONF"
-        log_info "已恢复原配置文件"
-    fi
+  # 恢复配置文件
+  if [[ -d "$BACKUP_DIR" ]] && [[ -f "$BACKUP_DIR/sniproxy.conf" ]]; then
+    cp "$BACKUP_DIR/sniproxy.conf" "$SNIPROXY_CONF"
+    log_info "已恢复原配置文件"
+  fi
 
-    systemctl stop sniproxy 2>/dev/null || true
+  # 停止服务
+  systemctl stop sniproxy 2>/dev/null || true
 
-    cleanup
+  # 清理临时文件
+  cleanup_temp_files
 
-    log_error "安装失败,已回滚"
-    exit 1
+  log_error "安装失败,已回滚"
+  exit 1
 }
 
 # 主函数
@@ -764,8 +837,10 @@ EOF
     # 显示摘要
     show_summary "${selected_services[@]}"
 
-    # 清理临时文件
-    cleanup
+    # 清理临时文件（trap 会自动调用 cleanup_temp_files）
+    log_info "清理临时文件..."
+    cleanup_temp_files
+    log "清理完成"
 
     log "安装完成!"
 }
