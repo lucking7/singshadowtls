@@ -1,27 +1,40 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# -*- coding: utf-8 -*-
+# SPDX-License-Identifier: MIT
+# File: install_sniproxy.sh
+# Description: SNI Proxy 自动化安装和配置脚本，支持流媒体解锁规则自动提取
+# Maintainer: lucking7@github.com
+# Version: 1.0.1
+# Requires: Bash 4.0+, curl, jq, git, autotools
 
-#############################################
-# SNI Proxy 自动化安装和配置脚本
-# 功能: 自动安装 SNI Proxy 并从 MetaCubeX 规则库提取域名
-# 作者: Auto-generated
-# 版本: 1.0.0
-#############################################
+set -Eeuo pipefail
 
-set -e
+# 版本与元信息
+readonly VERSION="1.0.1"
+readonly MAINTAINER="lucking7@github.com"
+readonly REQUIRES_BASH="4.0+"
+readonly SCRIPT_BASENAME="$(basename "$0")"
+readonly SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
-# 颜色定义
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+# 颜色定义（ANSI 转义码）
+readonly COLOR_RED='\033[0;31m'
+readonly COLOR_GREEN='\033[0;32m'
+readonly COLOR_YELLOW='\033[1;33m'
+readonly COLOR_BLUE='\033[0;34m'
+readonly COLOR_RESET='\033[0m'
+
+# 兼容性：保留旧变量名
+RED="$COLOR_RED"
+GREEN="$COLOR_GREEN"
+YELLOW="$COLOR_YELLOW"
+BLUE="$COLOR_BLUE"
+NC="$COLOR_RESET"
 
 # 全局变量
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMP_DIR="/tmp/sniproxy_install_$$"
 BACKUP_DIR="/etc/sniproxy_backup_$(date +%Y%m%d_%H%M%S)"
-SNIPROXY_CONF="/etc/sniproxy.conf"
-LOG_FILE="/var/log/sniproxy_install.log"
+readonly SNIPROXY_CONF="/etc/sniproxy.conf"
+readonly LOG_FILE="/var/log/sniproxy_install.log"
 
 # 规则库 URL 映射
 declare -A RULE_URLS=(
@@ -35,30 +48,72 @@ declare -A RULE_URLS=(
     ["Hulu"]="https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/hulu.json"
 )
 
-# 日志函数
+# 清理函数（遵循 R4.6.2）
+cleanup() {
+  if [[ -n "${TEMP_DIR:-}" ]] && [[ -d "$TEMP_DIR" ]]; then
+    rm -rf -- "$TEMP_DIR"
+  fi
+}
+
+# 错误处理函数
+on_error() {
+  local exit_code=$1
+  local line_number=$2
+  log_error "脚本在第 $line_number 行发生错误，退出码: $exit_code"
+  cleanup
+}
+
+# 设置 trap（遵循 R4.6.2）
+trap cleanup EXIT
+trap 'on_error $? $LINENO' ERR
+
+# 日志函数（遵循 R4.7.1）
 log() {
-    echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')]${NC} $1" | tee -a "$LOG_FILE"
+  printf "%b\n" "${COLOR_GREEN}[$(date +'%Y-%m-%d %H:%M:%S')]${COLOR_RESET} %s" "$1" | tee -a "$LOG_FILE"
 }
 
 log_error() {
-    echo -e "${RED}[ERROR]${NC} $1" | tee -a "$LOG_FILE"
+  printf "%b\n" "${COLOR_RED}[ERROR][$SCRIPT_BASENAME]${COLOR_RESET} %s" "$1" >&2 | tee -a "$LOG_FILE"
 }
 
 log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1" | tee -a "$LOG_FILE"
+  printf "%b\n" "${COLOR_YELLOW}[WARN][$SCRIPT_BASENAME]${COLOR_RESET} %s" "$1" | tee -a "$LOG_FILE"
 }
 
 log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1" | tee -a "$LOG_FILE"
+  printf "%b\n" "${COLOR_BLUE}[INFO][$SCRIPT_BASENAME]${COLOR_RESET} %s" "$1" | tee -a "$LOG_FILE"
+}
+
+# 依赖检查函数（遵循 R4.10.1）
+ensure_command() {
+  local cmd=$1
+  local install_hint=${2:-"请参照 README 安装"}
+
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    log_error "缺少依赖: $cmd。$install_hint"
+    exit 69
+  fi
+}
+
+# 检查所有必需依赖
+check_dependencies() {
+  log_info "检查必需依赖..."
+
+  ensure_command "curl" "请安装: apt-get install curl 或 yum install curl"
+  ensure_command "jq" "请安装: apt-get install jq 或 yum install jq"
+  ensure_command "git" "请安装: apt-get install git 或 yum install git"
+  ensure_command "make" "请安装: apt-get install build-essential 或 yum groupinstall 'Development Tools'"
+
+  log_info "所有依赖检查通过"
 }
 
 # 检查是否为 root 用户
 check_root() {
-    if [[ $EUID -ne 0 ]]; then
-        log_error "此脚本必须以 root 权限运行"
-        echo "请使用: sudo $0"
-        exit 1
-    fi
+  if [[ $EUID -ne 0 ]]; then
+    log_error "此脚本必须以 root 权限运行"
+    printf "%s\n" "请使用: sudo $0"
+    exit 77
+  fi
 }
 
 # 检测操作系统
