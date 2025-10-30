@@ -497,6 +497,10 @@ EOF
   local successful_services=0
   local failed_services=0
 
+  # 保存当前的 ERR trap 并临时禁用它,避免单个服务失败触发 rollback
+  local old_trap=$(trap -p ERR)
+  trap - ERR
+
   for service in "${selected_services[@]}"; do
     local url="${RULE_URLS[$service]}"
     local json_file="$TEMP_DIR/${service// /_}.json"
@@ -557,6 +561,9 @@ EOF
       ((failed_services++))
     fi
   done
+
+  # 恢复原来的 ERR trap
+  eval "$old_trap"
 
   # 检查是否至少有一个服务成功
   if [[ $successful_services -eq 0 ]]; then
