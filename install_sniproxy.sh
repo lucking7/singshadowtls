@@ -4,13 +4,13 @@
 # File: install_sniproxy.sh
 # Description: SNI Proxy 自动化安装和配置脚本，支持流媒体解锁规则自动提取
 # Maintainer: lucking7@github.com
-# Version: 1.0.1
+# Version: 1.0.2
 # Requires: Bash 4.0+, curl, jq, git, autotools
 
 set -Eeuo pipefail
 
 # 版本与元信息
-readonly VERSION="1.0.1"
+readonly SCRIPT_VERSION="1.0.2"
 readonly MAINTAINER="lucking7@github.com"
 readonly REQUIRES_BASH="4.0+"
 readonly SCRIPT_BASENAME="$(basename "$0")"
@@ -69,19 +69,19 @@ trap 'on_error $? $LINENO' ERR
 
 # 日志函数（遵循 R4.7.1）
 log() {
-  printf "%b\n" "${COLOR_GREEN}[$(date +'%Y-%m-%d %H:%M:%S')]${COLOR_RESET} %s" "$1" | tee -a "$LOG_FILE"
+  printf "${COLOR_GREEN}[%s]${COLOR_RESET} %s\n" "$(date +'%Y-%m-%d %H:%M:%S')" "$1" | tee -a "$LOG_FILE"
 }
 
 log_error() {
-  printf "%b\n" "${COLOR_RED}[ERROR][$SCRIPT_BASENAME]${COLOR_RESET} %s" "$1" >&2 | tee -a "$LOG_FILE"
+  printf "${COLOR_RED}[ERROR][%s]${COLOR_RESET} %s\n" "$SCRIPT_BASENAME" "$1" >&2 | tee -a "$LOG_FILE"
 }
 
 log_warn() {
-  printf "%b\n" "${COLOR_YELLOW}[WARN][$SCRIPT_BASENAME]${COLOR_RESET} %s" "$1" | tee -a "$LOG_FILE"
+  printf "${COLOR_YELLOW}[WARN][%s]${COLOR_RESET} %s\n" "$SCRIPT_BASENAME" "$1" | tee -a "$LOG_FILE"
 }
 
 log_info() {
-  printf "%b\n" "${COLOR_BLUE}[INFO][$SCRIPT_BASENAME]${COLOR_RESET} %s" "$1" | tee -a "$LOG_FILE"
+  printf "${COLOR_BLUE}[INFO][%s]${COLOR_RESET} %s\n" "$SCRIPT_BASENAME" "$1" | tee -a "$LOG_FILE"
 }
 
 # 依赖检查函数（遵循 R4.10.1）
@@ -118,18 +118,34 @@ check_root() {
 
 # 检测操作系统
 detect_os() {
-    if [[ -f /etc/os-release ]]; then
-        . /etc/os-release
-        OS=$ID
-        OS_VERSION=$VERSION_ID
-    elif [[ -f /etc/redhat-release ]]; then
-        OS="centos"
-    else
-        log_error "无法检测操作系统类型"
-        exit 1
-    fi
-    
-    log_info "检测到操作系统: $OS $OS_VERSION"
+  local os_id=""
+  local os_version_id=""
+
+  if [[ -f /etc/os-release ]]; then
+    # 读取 /etc/os-release 到局部变量，避免污染全局变量
+    # shellcheck source=/dev/null
+    while IFS='=' read -r key value; do
+      # 移除引号
+      value="${value%\"}"
+      value="${value#\"}"
+
+      case "$key" in
+        ID) os_id="$value" ;;
+        VERSION_ID) os_version_id="$value" ;;
+      esac
+    done < /etc/os-release
+
+    OS="${os_id:-unknown}"
+    OS_VERSION="${os_version_id:-unknown}"
+  elif [[ -f /etc/redhat-release ]]; then
+    OS="centos"
+    OS_VERSION="unknown"
+  else
+    log_error "无法检测操作系统类型"
+    exit 71
+  fi
+
+  log_info "检测到操作系统: $OS $OS_VERSION"
 }
 
 # 检查网络连接
