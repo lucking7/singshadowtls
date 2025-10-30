@@ -84,7 +84,7 @@ check_network() {
     if ! curl -s --connect-timeout 5 https://raw.githubusercontent.com > /dev/null 2>&1; then
         log_error "无法连接到 GitHub,请检查网络连接"
         echo "提示: 如果在中国大陆,可能需要配置代理"
-        read -p "是否继续? (y/n): " continue_choice
+        read -p "是否继续? (y/n): " continue_choice < /dev/tty
         if [[ ! $continue_choice =~ ^[Yy]$ ]]; then
             exit 1
         fi
@@ -266,7 +266,7 @@ select_services() {
 
     while true; do
         echo -n "请输入选项 (多个选项用空格分隔): "
-        read -r choices
+        read -r choices < /dev/tty
 
         if [[ "$choices" =~ [Aa] ]]; then
             selected_services=("${services[@]}")
@@ -394,7 +394,7 @@ configure_firewall() {
 
     if ! command -v ufw &> /dev/null; then
         log_warn "未检测到 UFW 防火墙"
-        read -p "是否安装 UFW? (y/n): " install_ufw
+        read -p "是否安装 UFW? (y/n): " install_ufw < /dev/tty
         if [[ $install_ufw =~ ^[Yy]$ ]]; then
             case $OS in
                 ubuntu|debian)
@@ -422,7 +422,7 @@ configure_firewall() {
     echo "建议配置白名单,仅允许被解锁机访问"
     echo ""
 
-    read -p "是否配置防火墙规则? (y/n): " config_fw
+    read -p "是否配置防火墙规则? (y/n): " config_fw < /dev/tty
 
     if [[ $config_fw =~ ^[Yy]$ ]]; then
         echo ""
@@ -430,7 +430,7 @@ configure_firewall() {
         echo "  [1] 允许所有IP访问 (不推荐,有安全风险)"
         echo "  [2] 仅允许指定IP访问 (推荐)"
         echo ""
-        read -p "请选择 (1/2): " fw_choice
+        read -p "请选择 (1/2): " fw_choice < /dev/tty
 
         case $fw_choice in
             1)
@@ -439,7 +439,7 @@ configure_firewall() {
                 log "已允许所有IP访问 80 和 443 端口"
                 ;;
             2)
-                read -p "请输入被解锁机的IP地址: " client_ip
+                read -p "请输入被解锁机的IP地址: " client_ip < /dev/tty
                 if [[ -n "$client_ip" ]]; then
                     ufw allow from "$client_ip" to any port 80 proto tcp
                     ufw allow from "$client_ip" to any port 443 proto tcp
@@ -455,7 +455,7 @@ configure_firewall() {
 
         # 确保 UFW 启用
         if ! ufw status | grep -q "Status: active"; then
-            read -p "UFW 未启用,是否启用? (y/n): " enable_ufw
+            read -p "UFW 未启用,是否启用? (y/n): " enable_ufw < /dev/tty
             if [[ $enable_ufw =~ ^[Yy]$ ]]; then
                 # 确保 SSH 端口开放
                 ufw allow 22/tcp
@@ -626,7 +626,7 @@ EOF
 
     # 询问是否继续
     echo ""
-    read -p "是否继续安装? (y/n): " continue_install
+    read -p "是否继续安装? (y/n): " continue_install < /dev/tty
     if [[ ! $continue_install =~ ^[Yy]$ ]]; then
         log_info "用户取消安装"
         exit 0

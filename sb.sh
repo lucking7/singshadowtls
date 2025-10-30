@@ -550,6 +550,7 @@ validate_sni_domains() {
     # Define all potential SNI domains
     local domains=(
         "p11.douyinpic.com"
+        "mp.weixin.qq.com"
         "coding.net"
         "upyun.com"
         "sns-video-hw.xhscdn.com"
@@ -559,6 +560,7 @@ validate_sni_domains() {
         "douyin.com"
         "toutiao.com"
         "v6-dy-y.ixigua.com"
+        "hls3-akm.douyucdn.cn"
         "publicassets.cdn-apple.com"
         "weather-data.apple.com"
         "gateway.icloud.com"
@@ -985,6 +987,7 @@ install_sing_box() {
         # Define all domains with their info (TLS 1.3 verified)
         declare -A all_sni_domains=(
             ["p11.douyinpic.com"]="Douyin Image CDN - Default"
+            ["mp.weixin.qq.com"]="WeChat"
             ["coding.net"]="Coding.net"
             ["upyun.com"]="UpYun CDN"
             ["sns-video-hw.xhscdn.com"]="XiaoHongShu Video"
@@ -994,6 +997,7 @@ install_sing_box() {
             ["douyin.com"]="Douyin"
             ["toutiao.com"]="Toutiao"
             ["v6-dy-y.ixigua.com"]="Ixigua Video"
+            ["hls3-akm.douyucdn.cn"]="Douyu CDN"
             ["publicassets.cdn-apple.com"]="Apple CDN"
             ["weather-data.apple.com"]="Apple Weather"
             ["gateway.icloud.com"]="iCloud Gateway - Most Stable"
@@ -1919,6 +1923,7 @@ change_shadowtls_sni() {
     # Define all domains with their info (TLS 1.3 verified)
     declare -A all_sni_domains=(
         ["p11.douyinpic.com"]="Douyin Image CDN"
+        ["mp.weixin.qq.com"]="WeChat"
         ["coding.net"]="Coding.net"
         ["upyun.com"]="UpYun CDN"
         ["sns-video-hw.xhscdn.com"]="XiaoHongShu Video"
@@ -1928,6 +1933,7 @@ change_shadowtls_sni() {
         ["douyin.com"]="Douyin"
         ["toutiao.com"]="Toutiao"
         ["v6-dy-y.ixigua.com"]="Ixigua Video"
+        ["hls3-akm.douyucdn.cn"]="Douyu CDN"
         ["publicassets.cdn-apple.com"]="Apple CDN"
         ["weather-data.apple.com"]="Apple Weather"
         ["gateway.icloud.com"]="iCloud Gateway - Most Stable"
@@ -2251,14 +2257,12 @@ configure_streaming_unlock() {
 
             if [[ $has_fakeip -ne 0 ]]; then
                 echo -e "${CYAN}添加 FakeIP DNS 服务器...${NC}"
-                # 重要：FakeIP 必须添加到数组末尾，不能作为第一个服务器
-                # 使用 .dns.servers + [{fakeip}] 而不是 [{fakeip}] + .dns.servers
-                jq '.dns.servers = .dns.servers + [{
+                jq '.dns.servers = [{
                     "tag": "dns_fakeip",
                     "type": "fakeip",
                     "inet4_range": "198.18.0.0/15",
                     "inet6_range": "fc00::/18"
-                }]' /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+                }] + .dns.servers' /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
             fi
 
             # 更新 DNS 规则 - 流媒体使用 FakeIP
@@ -3424,24 +3428,6 @@ EOF
         "path": "/dns-query"
       },
 EOF
-        default_dns_added=true
-    fi
-
-    # 二次检查：确保在添加 FakeIP 之前至少有一个真实 DNS 服务器
-    # 这是关键的安全检查，防止 FakeIP 成为第一个服务器
-    if [[ $default_dns_added == false ]]; then
-        echo -e "${RED}错误: 未能添加任何真实的 DNS 服务器${NC}"
-        echo -e "${YELLOW}正在添加 Cloudflare DNS 作为默认服务器...${NC}"
-        cat >> /etc/sing-box/config.json << EOF
-      {
-        "tag": "dns_cloudflare",
-        "type": "https",
-        "server": "1.1.1.1",
-        "server_port": 443,
-        "path": "/dns-query"
-      },
-EOF
-        default_dns_added=true
     fi
 
     # 现在添加 FakeIP 服务器（在真实 DNS 之后）
@@ -3623,7 +3609,6 @@ EOF
       }
     ],
     "auto_detect_interface": true,
-    "default_domain_resolver": "dns_local",
     "final": "direct"
   },
   "outbounds": [
@@ -3711,28 +3696,6 @@ EOF
 
     # 检查并配置 sing-box 用户权限
     echo -e "\n${CYAN}配置服务权限...${NC}"
-
-    # 首先检查 systemd 服务文件中配置的用户是否存在于系统中
-    if [[ -f /etc/systemd/system/sing-box.service ]]; then
-        local service_user=$(grep "^User=" /etc/systemd/system/sing-box.service | cut -d'=' -f2)
-
-        # 如果 service 文件中配置了非 root 用户，检查该用户是否存在
-        if [[ -n "$service_user" && "$service_user" != "root" ]]; then
-            if ! id -u "$service_user" > /dev/null 2>&1; then
-                echo -e "${YELLOW}⚠ 检测到 systemd 服务配置了用户 '$service_user'，但该用户不存在${NC}"
-                echo -e "${CYAN}对于 DNS 服务（监听端口 $listen_port），推荐使用 root 用户运行${NC}"
-                echo -e "${CYAN}正在自动修改服务配置为 root 用户...${NC}"
-
-                # 删除 User 和 Group 配置，使服务以 root 运行
-                sed -i '/^User=/d' /etc/systemd/system/sing-box.service
-                sed -i '/^Group=/d' /etc/systemd/system/sing-box.service
-                systemctl daemon-reload
-
-                echo -e "${GREEN}✓ 已配置服务使用 root 用户运行${NC}"
-                service_user="root"
-            fi
-        fi
-    fi
 
     # 检查 systemd 服务文件中的用户配置
     if [[ -f /etc/systemd/system/sing-box.service ]]; then
