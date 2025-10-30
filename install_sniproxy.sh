@@ -4,13 +4,13 @@
 # File: install_sniproxy.sh
 # Description: SNI Proxy 自动化安装和配置脚本，支持流媒体解锁规则自动提取
 # Maintainer: lucking7@github.com
-# Version: 1.0.4
+# Version: 1.0.5
 # Requires: Bash 4.0+, curl, jq, git (CentOS需要), autotools (CentOS需要)
 
 set -Eeuo pipefail
 
 # 版本与元信息
-readonly SCRIPT_VERSION="1.0.4"
+readonly SCRIPT_VERSION="1.0.5"
 readonly MAINTAINER="lucking7@github.com"
 readonly REQUIRES_BASH="4.0+"
 readonly SCRIPT_BASENAME="$(basename "$0")"
@@ -275,25 +275,41 @@ EOF
 
 # 从 JSON 提取域名
 extract_domains_from_json() {
-    local json_file=$1
-    local domains=()
-    
-    # 提取 domain 字段
-    if jq -e '.rules[].domain[]' "$json_file" > /dev/null 2>&1; then
-        while IFS= read -r domain; do
-            domains+=("$domain")
-        done < <(jq -r '.rules[].domain[]?' "$json_file" 2>/dev/null | grep -v "^null$" || true)
-    fi
-    
-    # 提取 domain_suffix 字段
-    if jq -e '.rules[].domain_suffix[]' "$json_file" > /dev/null 2>&1; then
-        while IFS= read -r suffix; do
-            domains+=("$suffix")
-        done < <(jq -r '.rules[].domain_suffix[]?' "$json_file" 2>/dev/null | grep -v "^null$" || true)
-    fi
-    
-    # 输出去重后的域名
+  local json_file=$1
+  local domains=()
+
+  # 验证文件存在且可读
+  if [[ ! -f "$json_file" ]]; then
+    log_error "extract_domains_from_json: 文件不存在: $json_file"
+    return 1
+  fi
+
+  # 提取 domain 字段
+  if jq -e '.rules[].domain[]' "$json_file" > /dev/null 2>&1; then
+    while IFS= read -r domain; do
+      if [[ -n "$domain" ]]; then
+        domains+=("$domain")
+      fi
+    done < <(jq -r '.rules[].domain[]?' "$json_file" 2>/dev/null | grep -v "^null$" || true)
+  fi
+
+  # 提取 domain_suffix 字段
+  if jq -e '.rules[].domain_suffix[]' "$json_file" > /dev/null 2>&1; then
+    while IFS= read -r suffix; do
+      if [[ -n "$suffix" ]]; then
+        domains+=("$suffix")
+      fi
+    done < <(jq -r '.rules[].domain_suffix[]?' "$json_file" 2>/dev/null | grep -v "^null$" || true)
+  fi
+
+  # 输出去重后的域名（处理空数组情况）
+  if [[ ${#domains[@]} -gt 0 ]]; then
     printf '%s\n' "${domains[@]}" | sort -u
+  else
+    # 数组为空时不输出任何内容（避免 set -u 错误）
+    log_warn "extract_domains_from_json: 未从 $json_file 提取到任何域名"
+    return 0
+  fi
 }
 
 # 转换域名为 SNI Proxy 格式
@@ -478,6 +494,8 @@ EOF
 
   # 处理每个选中的服务
   local total_domains=0
+  local successful_services=0
+  local failed_services=0
 
   for service in "${selected_services[@]}"; do
     local url="${RULE_URLS[$service]}"
@@ -485,19 +503,28 @@ EOF
 
     log_info "处理服务: $service"
 
+    # 检查规则文件是否存在
     if [[ ! -f "$json_file" ]]; then
-      log_warn "  ✗ 规则文件不存在: $json_file，跳过"
+      log_warn "  ✗ 规则文件不存在: $json_file，跳过此服务"
+      ((failed_services++))
       continue
     fi
+
+    # 临时禁用严格错误处理，避免单个服务失败导致整个脚本退出
+    set +e
 
     # 添加服务注释
     {
       echo ""
       echo "    # $service"
-    } >> "$SNIPROXY_CONF" || {
-      log_error "无法写入服务注释: $service"
-      return 1
-    }
+    } >> "$SNIPROXY_CONF"
+
+    if [[ $? -ne 0 ]]; then
+      log_error "  ✗ 无法写入服务注释: $service，跳过此服务"
+      ((failed_services++))
+      set -e
+      continue
+    fi
 
     local count=0
     local failed_count=0
@@ -505,7 +532,7 @@ EOF
     # 提取并转换域名
     while IFS= read -r domain; do
       if [[ -n "$domain" ]]; then
-        if convert_to_sniproxy_format "$domain" >> "$SNIPROXY_CONF"; then
+        if convert_to_sniproxy_format "$domain" >> "$SNIPROXY_CONF" 2>/dev/null; then
           ((count++))
           ((total_domains++))
         else
@@ -513,17 +540,31 @@ EOF
           log_warn "  ✗ 转换失败: $domain"
         fi
       fi
-    done < <(extract_domains_from_json "$json_file")
+    done < <(extract_domains_from_json "$json_file" 2>/dev/null || true)
 
+    # 恢复严格错误处理
+    set -e
+
+    # 统计结果
     if [[ $count -gt 0 ]]; then
       log_info "  ✓ $service: 添加了 $count 个域名规则"
+      ((successful_services++))
       if [[ $failed_count -gt 0 ]]; then
         log_warn "  ⚠ $service: $failed_count 个域名转换失败"
       fi
     else
-      log_warn "  ✗ $service: 没有提取到任何域名"
+      log_warn "  ✗ $service: 没有提取到任何域名，跳过此服务"
+      ((failed_services++))
     fi
   done
+
+  # 检查是否至少有一个服务成功
+  if [[ $successful_services -eq 0 ]]; then
+    log_error "所有服务处理失败，无法生成有效配置"
+    return 1
+  fi
+
+  log_info "服务处理完成: 成功 $successful_services 个，失败 $failed_services 个"
 
   # 添加配置文件尾部
   log_info "写入配置文件尾部..."
