@@ -2223,7 +2223,7 @@ change_dns_servers() {
     fi
 }
 
-# Function to configure streaming media unlock (类似 SNI Proxy + smartdns)
+# Function to configure streaming media unlock (单机优化 - 查看/清除配置)
 configure_streaming_unlock() {
     if [[ ! -f /etc/sing-box/config.json ]]; then
         echo -e "${RED}Error: Configuration file not found.${NC}"
@@ -2231,106 +2231,23 @@ configure_streaming_unlock() {
     fi
 
     echo -e "\n${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║${NC}  ${YELLOW}流媒体解锁配置 (Streaming Media Unlock)${NC}       ${BLUE}║${NC}"
+    echo -e "${BLUE}║${NC}  ${YELLOW}流媒体解锁配置 (单机优化)${NC}                      ${BLUE}║${NC}"
     echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}\n"
 
-    echo -e "${CYAN}此功能类似 SNI Proxy + smartdns 方案，通过以下方式实现解锁:${NC}"
-    echo -e "  ${GREEN}✓${NC} DNS 分流 - 不同流媒体使用不同 DNS 策略"
-    echo -e "  ${GREEN}✓${NC} FakeIP 加速 - 减少 DNS 查询延迟"
-    echo -e "  ${GREEN}✓${NC} IPv6 优先 - 提高解锁成功率"
-    echo -e "  ${GREEN}✓${NC} 智能路由 - 自动选择最佳线路\n"
+    echo -e "${CYAN}此功能用于单机流媒体解锁优化${NC}"
+    echo -e "${YELLOW}注意: 三层架构解锁方案请使用:${NC}"
+    echo -e "  ${GREEN}•${NC} 被解锁机: 选项 14 (DNS 分流配置)"
+    echo -e "  ${GREEN}•${NC} 解锁机: 选项 15 (DNS 解锁服务器)\n"
 
-    echo -e "${YELLOW}选择配置模式:${NC}"
-    echo -e "  ${CYAN}1)${NC} 启用 FakeIP 模式 (推荐 - 性能最佳)"
-    echo -e "  ${CYAN}2)${NC} 标准 DNS 模式 (兼容性最佳)"
-    echo -e "  ${CYAN}3)${NC} 查看当前配置"
+    echo -e "${YELLOW}选择操作:${NC}"
+    echo -e "  ${CYAN}1)${NC} 查看当前流媒体解锁配置"
+    echo -e "  ${CYAN}2)${NC} 清除流媒体解锁配置"
     echo -e "  ${CYAN}0)${NC} 返回主菜单\n"
 
-    read -p "$(echo -e "${YELLOW}请选择 [0-3]: ${NC}")" unlock_choice
+    read -p "$(echo -e "${YELLOW}请选择 [0-2]: ${NC}")" unlock_choice
 
     case $unlock_choice in
         1)
-            echo -e "\n${BLUE}启用 FakeIP 模式${NC}"
-
-            # 检查是否已有 FakeIP 服务器
-            local has_fakeip=$(jq -e '.dns.servers[] | select(.type == "fakeip")' /etc/sing-box/config.json >/dev/null 2>&1; echo $?)
-
-            if [[ $has_fakeip -ne 0 ]]; then
-                echo -e "${CYAN}添加 FakeIP DNS 服务器...${NC}"
-                jq '.dns.servers = [{
-                    "tag": "dns_fakeip",
-                    "type": "fakeip",
-                    "inet4_range": "198.18.0.0/15",
-                    "inet6_range": "fc00::/18"
-                }] + .dns.servers' /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
-            fi
-
-            # 更新 DNS 规则 - 流媒体使用 FakeIP
-            echo -e "${CYAN}配置流媒体 DNS 规则...${NC}"
-            jq '
-                .dns.rules = [
-                    {
-                        "rule_set": ["geosite-category-ads-all"],
-                        "action": "reject"
-                    },
-                    {
-                        "rule_set": ["geosite-netflix", "geosite-disney", "geosite-category-media"],
-                        "server": "dns_fakeip",
-                        "query_type": ["A", "AAAA"]
-                    }
-                ] + (.dns.rules | map(select(.rule_set[0] != "geosite-netflix" and .rule_set[0] != "geosite-disney" and .rule_set[0] != "geosite-category-media" and .rule_set[0] != "geosite-category-ads-all")))
-            ' /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
-
-            # 确保 experimental.cache_file.store_fakeip 启用
-            echo -e "${CYAN}启用 FakeIP 缓存...${NC}"
-            jq '.experimental.cache_file.store_fakeip = true' /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
-
-            echo -e "${GREEN}✓ FakeIP 模式已启用${NC}"
-            echo -e "${CYAN}性能优势:${NC}"
-            echo -e "  - 减少 DNS 查询延迟 50-200ms"
-            echo -e "  - 提高分流准确性"
-            echo -e "  - 降低 DNS 泄漏风险"
-            ;;
-
-        2)
-            echo -e "\n${BLUE}配置标准 DNS 模式${NC}"
-
-            # 移除 FakeIP 规则，使用标准 DNS
-            echo -e "${CYAN}配置流媒体 DNS 策略...${NC}"
-
-            # 确保流媒体使用 IPv6 优先策略
-            jq '
-                .dns.rules = [
-                    {
-                        "rule_set": ["geosite-category-ads-all"],
-                        "action": "reject"
-                    },
-                    {
-                        "rule_set": ["geosite-netflix"],
-                        "server": "dns_cf",
-                        "strategy": "ipv6_only"
-                    },
-                    {
-                        "rule_set": ["geosite-disney"],
-                        "server": "dns_cf",
-                        "strategy": "ipv6_only"
-                    },
-                    {
-                        "rule_set": ["geosite-category-media"],
-                        "server": "dns_cf",
-                        "strategy": "ipv6_only"
-                    }
-                ] + (.dns.rules | map(select(.rule_set[0] != "geosite-netflix" and .rule_set[0] != "geosite-disney" and .rule_set[0] != "geosite-category-media" and .rule_set[0] != "geosite-category-ads-all")))
-            ' /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
-
-            echo -e "${GREEN}✓ 标准 DNS 模式已配置${NC}"
-            echo -e "${CYAN}特点:${NC}"
-            echo -e "  - 兼容性最佳"
-            echo -e "  - IPv6 优先解锁"
-            echo -e "  - 适合所有场景"
-            ;;
-
-        3)
             echo -e "\n${BLUE}当前流媒体解锁配置${NC}"
             echo -e "${CYAN}═══════════════════════════════════════${NC}\n"
 
@@ -2357,6 +2274,60 @@ configure_streaming_unlock() {
             return 0
             ;;
 
+        2)
+            echo -e "\n${YELLOW}确认要清除流媒体解锁配置吗?${NC}"
+            read -p "此操作将删除 FakeIP 服务器和流媒体 DNS 规则 [y/N]: " confirm
+
+            if [[ ! $confirm =~ ^[Yy]$ ]]; then
+                echo -e "${CYAN}已取消${NC}"
+                return 0
+            fi
+
+            # 备份当前配置
+            cp /etc/sing-box/config.json /etc/sing-box/config.json.backup.$(date +%Y%m%d_%H%M%S)
+            echo -e "${GREEN}✓ 已备份当前配置${NC}"
+
+            # 删除 FakeIP 服务器
+            echo -e "${CYAN}删除 FakeIP DNS 服务器...${NC}"
+            jq '.dns.servers = (.dns.servers | map(select(.type != "fakeip")))' \
+                /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+
+            # 删除流媒体 DNS 规则
+            echo -e "${CYAN}删除流媒体 DNS 规则...${NC}"
+            jq '.dns.rules = (.dns.rules | map(select(
+                .rule_set == null or
+                (.rule_set | any(contains("netflix") or contains("disney") or contains("media")) | not)
+            )))' /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+
+            # 禁用 FakeIP 缓存
+            echo -e "${CYAN}禁用 FakeIP 缓存...${NC}"
+            jq '.experimental.cache_file.store_fakeip = false' \
+                /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+
+            echo -e "${GREEN}✓ 流媒体解锁配置已清除${NC}"
+
+            # 应用配置
+            chown sing-box:sing-box /etc/sing-box/config.json
+            chmod 640 /etc/sing-box/config.json
+
+            if ! format_config; then
+                echo -e "${RED}Error: Configuration validation failed.${NC}"
+                echo -e "${YELLOW}正在恢复备份...${NC}"
+                cp /etc/sing-box/config.json.backup.$(date +%Y%m%d_%H%M%S) /etc/sing-box/config.json
+                return 1
+            fi
+
+            echo -e "\n${CYAN}重启 Sing-Box 服务...${NC}"
+            systemctl restart sing-box
+
+            if systemctl is-active --quiet sing-box; then
+                echo -e "${GREEN}✓ 服务重启成功${NC}"
+            else
+                echo -e "${RED}✗ 服务重启失败${NC}"
+                return 1
+            fi
+            ;;
+
         0)
             return 0
             ;;
@@ -2366,41 +2337,21 @@ configure_streaming_unlock() {
             return 1
             ;;
     esac
-
-    # 应用配置
-    chown sing-box:sing-box /etc/sing-box/config.json
-    chmod 640 /etc/sing-box/config.json
-
-    if ! format_config; then
-        echo -e "${RED}Error: Configuration validation failed.${NC}"
-        return 1
-    fi
-
-    echo -e "\n${CYAN}重启 Sing-Box 服务以应用更改...${NC}"
-    systemctl restart sing-box
-
-    if systemctl is-active --quiet sing-box; then
-        echo -e "${GREEN}✓ 流媒体解锁配置已成功应用!${NC}\n"
-
-        echo -e "${BLUE}使用建议:${NC}"
-        echo -e "  ${CYAN}1.${NC} 确保服务器支持 IPv6"
-        echo -e "  ${CYAN}2.${NC} 客户端需要启用 IPv6"
-        echo -e "  ${CYAN}3.${NC} 测试流媒体访问: Netflix, Disney+, etc."
-        echo -e "  ${CYAN}4.${NC} 如遇问题，可切换到标准 DNS 模式\n"
-    else
-        echo -e "${RED}✗ 服务重启失败，请检查配置${NC}"
-        return 1
-    fi
 }
 
-# Function to configure DNS routing (按平台配置不同 DNS)
+# Function to configure DNS routing (被解锁机 - 配置解锁 DNS)
 configure_dns_routing() {
     echo -e "\n${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║${NC}  ${YELLOW}DNS 分流配置 (按平台配置不同 DNS)${NC}              ${BLUE}║${NC}"
+    echo -e "${BLUE}║${NC}  ${YELLOW}DNS 分流配置 (被解锁机)${NC}                        ${BLUE}║${NC}"
     echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}\n"
 
-    echo -e "${CYAN}此功能允许为不同的流媒体平台配置不同的 DNS 服务器${NC}"
-    echo -e "${CYAN}例如: Netflix 使用 Cloudflare, Disney+ 使用 Google DNS${NC}\n"
+    echo -e "${CYAN}此功能用于被解锁机配置 DNS 分流规则${NC}"
+    echo -e "${CYAN}流媒体/AI 域名使用解锁机 DNS,其他域名使用公共 DNS${NC}\n"
+
+    echo -e "${YELLOW}适用场景:${NC}"
+    echo -e "  ${GREEN}•${NC} 被解锁机作为中转代理服务器"
+    echo -e "  ${GREEN}•${NC} 需要将流媒体流量转发到解锁机"
+    echo -e "  ${GREEN}•${NC} 解锁机已部署 SNI Proxy + DNS 服务器\n"
 
     echo -e "${YELLOW}请选择操作:${NC}"
     echo -e "  ${CYAN}1)${NC} 配置 DNS 分流规则"
@@ -2947,18 +2898,26 @@ restore_default_dns_config() {
     fi
 }
 
-# Function to configure DNS unlock server (纯 DNS 解锁服务器)
+# Function to configure DNS unlock server (解锁机 - 部署 DNS 服务)
 configure_dns_unlock_server() {
     echo -e "\n${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║${NC}  ${YELLOW}纯 DNS 解锁服务器配置 (不代理流量)${NC}            ${BLUE}║${NC}"
+    echo -e "${BLUE}║${NC}  ${YELLOW}DNS 解锁服务器部署 (解锁机)${NC}                    ${BLUE}║${NC}"
     echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}\n"
 
-    echo -e "${CYAN}此功能将 sing-box 配置为纯 DNS 解锁服务器${NC}"
-    echo -e "${CYAN}只提供 DNS 解析服务，不代理流量${NC}"
-    echo -e "${CYAN}客户端设置 DNS 为本服务器 IP 即可使用${NC}\n"
+    echo -e "${CYAN}此功能用于在解锁机上部署 DNS 服务器${NC}"
+    echo -e "${CYAN}配合 SNI Proxy 实现流媒体解锁${NC}\n"
+
+    echo -e "${YELLOW}适用场景:${NC}"
+    echo -e "  ${GREEN}•${NC} 解锁机部署 DNS 服务器"
+    echo -e "  ${GREEN}•${NC} 将流媒体域名解析到解锁机 IP"
+    echo -e "  ${GREEN}•${NC} 配合 SNI Proxy 实现解锁\n"
+
+    echo -e "${YELLOW}前置要求:${NC}"
+    echo -e "  ${RED}•${NC} 已使用 install_sniproxy.sh 部署 SNI Proxy"
+    echo -e "  ${RED}•${NC} SNI Proxy 监听 0.0.0.0:80/443\n"
 
     echo -e "${YELLOW}请选择操作:${NC}"
-    echo -e "  ${CYAN}1)${NC} 部署纯 DNS 解锁服务器"
+    echo -e "  ${CYAN}1)${NC} 部署 DNS 解锁服务器"
     echo -e "  ${CYAN}2)${NC} 查看 DNS 服务器配置"
     echo -e "  ${CYAN}3)${NC} 测试 DNS 服务器"
     echo -e "  ${CYAN}4)${NC} 生成客户端配置说明"
@@ -4350,9 +4309,9 @@ show_menu() {
     echo -e "  ${CYAN}10)${NC} ShadowTLS 设置"
     echo -e "  ${CYAN}11)${NC} Shadowsocks 设置"
     echo -e "  ${CYAN}12)${NC} DNS 设置"
-    echo -e "  ${CYAN}13)${NC} 流媒体解锁设置 ${YELLOW}(类似 SNI Proxy + smartdns)${NC}"
-    echo -e "  ${CYAN}14)${NC} DNS 分流配置 ${YELLOW}(按平台配置不同 DNS)${NC}"
-    echo -e "  ${CYAN}15)${NC} 纯 DNS 解锁服务器 ${YELLOW}(不代理流量)${NC}\n"
+    echo -e "  ${CYAN}13)${NC} 流媒体解锁设置 ${YELLOW}(单机优化 - 查看/清除)${NC}"
+    echo -e "  ${CYAN}14)${NC} DNS 分流配置 ${YELLOW}(被解锁机 - 配置解锁 DNS)${NC}"
+    echo -e "  ${CYAN}15)${NC} DNS 解锁服务器 ${YELLOW}(解锁机 - 部署 DNS 服务)${NC}\n"
 
     # 系统工具
     echo -e "${GREEN} 系统工具${NC}"
