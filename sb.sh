@@ -4308,7 +4308,7 @@ show_menu() {
     echo -e "  ${CYAN}9)${NC} 密码设置"
     echo -e "  ${CYAN}10)${NC} ShadowTLS 设置"
     echo -e "  ${CYAN}11)${NC} Shadowsocks 设置"
-    echo -e "  ${CYAN}12)${NC} DNS 设置"
+    echo -e "  ${CYAN}12)${NC} DNS 基础设置 ${YELLOW}(DNS 策略和服务器)${NC}"
     echo -e "  ${CYAN}13)${NC} 流媒体解锁设置 ${YELLOW}(单机优化 - 查看/清除)${NC}"
     echo -e "  ${CYAN}14)${NC} DNS 分流配置 ${YELLOW}(被解锁机 - 配置解锁 DNS)${NC}"
     echo -e "  ${CYAN}15)${NC} DNS 解锁服务器 ${YELLOW}(解锁机 - 部署 DNS 服务)${NC}\n"
