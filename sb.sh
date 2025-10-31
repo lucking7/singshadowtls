@@ -1029,7 +1029,12 @@ install_sing_box() {
         fi
         
         read -p "$(echo -e "${YELLOW}Enter your choice [1-$menu_index] (Default: 1 - $default_domain): ${NC}")" sni_choice
-        
+
+        # Handle empty input (default to first domain)
+        if [[ -z "$sni_choice" ]]; then
+            sni_choice=1
+        fi
+
         if [[ "$sni_choice" == "$menu_index" ]]; then
             # Custom domain
             read -p "$(echo -e "${YELLOW}Enter custom domain: ${NC}")" proxysite
@@ -1043,10 +1048,12 @@ install_sing_box() {
             else
                 echo -e "${YELLOW}⚠ Warning: Custom domain $proxysite may not support TLS 1.3${NC}"
             fi
-        elif [[ -n "${choice_to_domain[$sni_choice]}" ]]; then
+        elif [[ -n "$sni_choice" ]] && [[ -n "${choice_to_domain[$sni_choice]:-}" ]]; then
+            # Valid choice from menu
             proxysite="${choice_to_domain[$sni_choice]}"
         else
-            # Invalid choice or empty, use default
+            # Invalid choice, use default
+            echo -e "${YELLOW}Invalid choice. Using default domain.${NC}"
             proxysite="$default_domain"
         fi
         
