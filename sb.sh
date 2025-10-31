@@ -1239,12 +1239,6 @@ INNER_EOF
     "dns": {
         "servers": [
             {
-                "tag": "dns_fakeip",
-                "type": "fakeip",
-                "inet4_range": "198.18.0.0/15",
-                "inet6_range": "fc00::/18"
-            },
-            {
                 "tag": "dns_cf",
                 "type": "https",
                 "server": "1.1.1.1"
@@ -1259,11 +1253,18 @@ INNER_EOF
                 "type": "local"
             },
             {
+                "tag": "dns_fakeip",
+                "type": "fakeip",
+                "inet4_range": "198.18.0.0/15",
+                "inet6_range": "fc00::/18"
+            },
+            {
                 "tag": "dns_block",
                 "type": "hosts",
                 "predefined": {}
             }
         ],
+        "final": "dns_cf",
         "strategy": "$default_strategy",
         "independent_cache": true,
         "rules": [
@@ -2663,7 +2664,8 @@ configure_dns_routing_rules() {
                        "server_port": $custom_port,
                        "path": $custom_path
                    }
-               ] + (.dns.servers | map(select(.tag == "dns_fakeip" or .tag == "dns_block")))' \
+               ] + (.dns.servers | map(select(.tag == "dns_fakeip" or .tag == "dns_block"))) |
+               .dns.final = "dns_cloudflare"' \
                /etc/sing-box/config.json > /tmp/config_temp.json && mv /tmp/config_temp.json /etc/sing-box/config.json
         else
             # UDP、TCP、DoT、DoQ 不需要 path 参数
@@ -2711,7 +2713,8 @@ configure_dns_routing_rules() {
                        "server": $custom_server,
                        "server_port": $custom_port
                    }
-               ] + (.dns.servers | map(select(.tag == "dns_fakeip" or .tag == "dns_block")))' \
+               ] + (.dns.servers | map(select(.tag == "dns_fakeip" or .tag == "dns_block"))) |
+               .dns.final = "dns_cloudflare"' \
                /etc/sing-box/config.json > /tmp/config_temp.json && mv /tmp/config_temp.json /etc/sing-box/config.json
         fi
     else
@@ -2750,7 +2753,8 @@ configure_dns_routing_rules() {
                    "tag": $local,
                    "type": "local"
                }
-           ] + (.dns.servers | map(select(.tag == "dns_fakeip" or .tag == "dns_block")))' \
+           ] + (.dns.servers | map(select(.tag == "dns_fakeip" or .tag == "dns_block"))) |
+           .dns.final = "dns_cloudflare"' \
            /etc/sing-box/config.json > /tmp/config_temp.json && mv /tmp/config_temp.json /etc/sing-box/config.json
     fi
 
@@ -2885,7 +2889,8 @@ restore_default_dns_config() {
             "tag": "dns_local",
             "type": "local"
         }
-    ] + (.dns.servers | map(select(.tag == "dns_fakeip" or .tag == "dns_block")))' \
+    ] + (.dns.servers | map(select(.tag == "dns_fakeip" or .tag == "dns_block"))) |
+    .dns.final = "dns_cf"' \
     /etc/sing-box/config.json > /tmp/config_temp.json && mv /tmp/config_temp.json /etc/sing-box/config.json
 
     echo -e "${GREEN}✓ 已恢复默认 DNS 配置${NC}"
@@ -3413,6 +3418,7 @@ EOF
         "predefined": {}
       }
     ],
+    "final": "dns_cloudflare",
     "strategy": "prefer_ipv4",
     "independent_cache": true,
     "rules": [
