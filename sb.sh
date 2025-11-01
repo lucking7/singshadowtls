@@ -2518,6 +2518,7 @@ configure_dns_routing_rules() {
     custom_dns_server=""
     custom_dns_port=""
     custom_dns_path=""
+    apply_custom_to_all=false
 
     # 配置 Netflix
     echo -e "${YELLOW}[1/5] Netflix 使用哪个 DNS 服务器?${NC}"
@@ -2527,42 +2528,123 @@ configure_dns_routing_rules() {
     # 如果选择自定义 DNS，配置自定义 DNS 服务器
     if [[ $netflix_dns == 6 ]] && [[ $custom_dns_configured == false ]]; then
         configure_custom_dns
+
+        # 如果自定义 DNS 配置成功，询问是否应用到所有平台
+        if [[ $custom_dns_configured == true ]]; then
+            echo -e "\n${YELLOW}是否将此自定义 DNS (${GREEN}$custom_dns_tag: $custom_dns_server${YELLOW}) 应用到所有流媒体平台?${NC}"
+            echo -e "${CYAN}选择 Yes 将自动为 Disney+、Spotify、YouTube、其他流媒体配置相同的 DNS${NC}"
+            read -p "应用到所有平台? [Y/n]: " apply_to_all
+            apply_to_all=${apply_to_all:-Y}
+
+            if [[ $apply_to_all =~ ^[Yy]$ ]]; then
+                apply_custom_to_all=true
+                disney_dns=6
+                spotify_dns=6
+                youtube_dns=6
+                other_dns=6
+                echo -e "${GREEN}✓ 已将自定义 DNS 应用到所有流媒体平台${NC}\n"
+            else
+                echo -e "${CYAN}将继续逐个配置其他平台${NC}\n"
+            fi
+        fi
     fi
 
-    # 配置 Disney+
-    echo -e "${YELLOW}[2/5] Disney+ 使用哪个 DNS 服务器?${NC}"
-    read -p "请选择 [1-6, 默认: 2]: " disney_dns
-    disney_dns=${disney_dns:-2}
+    # 如果没有应用到所有平台，继续逐个询问
+    if [[ $apply_custom_to_all == false ]]; then
+        # 配置 Disney+
+        echo -e "${YELLOW}[2/5] Disney+ 使用哪个 DNS 服务器?${NC}"
+        if [[ $custom_dns_configured == true ]]; then
+            echo -e "  ${CYAN}1)${NC} Cloudflare DNS (1.1.1.1)"
+            echo -e "  ${CYAN}2)${NC} Google DNS (8.8.8.8)"
+            echo -e "  ${CYAN}3)${NC} AdGuard DNS (94.140.14.14)"
+            echo -e "  ${CYAN}4)${NC} Quad9 DNS (9.9.9.9)"
+            echo -e "  ${CYAN}5)${NC} 本地 DNS"
+            echo -e "  ${CYAN}6)${NC} 自定义解锁 DNS (重新配置)"
+            echo -e "  ${CYAN}7)${NC} 使用刚才配置的自定义 DNS ${GREEN}($custom_dns_tag: $custom_dns_server)${NC}\n"
+            read -p "请选择 [1-7, 默认: 7]: " disney_dns
+            disney_dns=${disney_dns:-7}
+        else
+            read -p "请选择 [1-6, 默认: 2]: " disney_dns
+            disney_dns=${disney_dns:-2}
+        fi
 
-    if [[ $disney_dns == 6 ]] && [[ $custom_dns_configured == false ]]; then
-        configure_custom_dns
-    fi
+        if [[ $disney_dns == 6 ]] && [[ $custom_dns_configured == false ]]; then
+            configure_custom_dns
+        elif [[ $disney_dns == 7 ]]; then
+            disney_dns=6  # 使用已配置的自定义 DNS
+        fi
 
-    # 配置 Spotify
-    echo -e "${YELLOW}[3/5] Spotify 使用哪个 DNS 服务器?${NC}"
-    read -p "请选择 [1-6, 默认: 3]: " spotify_dns
-    spotify_dns=${spotify_dns:-3}
+        # 配置 Spotify
+        echo -e "${YELLOW}[3/5] Spotify 使用哪个 DNS 服务器?${NC}"
+        if [[ $custom_dns_configured == true ]]; then
+            echo -e "  ${CYAN}1)${NC} Cloudflare DNS (1.1.1.1)"
+            echo -e "  ${CYAN}2)${NC} Google DNS (8.8.8.8)"
+            echo -e "  ${CYAN}3)${NC} AdGuard DNS (94.140.14.14)"
+            echo -e "  ${CYAN}4)${NC} Quad9 DNS (9.9.9.9)"
+            echo -e "  ${CYAN}5)${NC} 本地 DNS"
+            echo -e "  ${CYAN}6)${NC} 自定义解锁 DNS (重新配置)"
+            echo -e "  ${CYAN}7)${NC} 使用刚才配置的自定义 DNS ${GREEN}($custom_dns_tag: $custom_dns_server)${NC}\n"
+            read -p "请选择 [1-7, 默认: 7]: " spotify_dns
+            spotify_dns=${spotify_dns:-7}
+        else
+            read -p "请选择 [1-6, 默认: 3]: " spotify_dns
+            spotify_dns=${spotify_dns:-3}
+        fi
 
-    if [[ $spotify_dns == 6 ]] && [[ $custom_dns_configured == false ]]; then
-        configure_custom_dns
-    fi
+        if [[ $spotify_dns == 6 ]] && [[ $custom_dns_configured == false ]]; then
+            configure_custom_dns
+        elif [[ $spotify_dns == 7 ]]; then
+            spotify_dns=6  # 使用已配置的自定义 DNS
+        fi
 
-    # 配置 YouTube
-    echo -e "${YELLOW}[4/5] YouTube 使用哪个 DNS 服务器?${NC}"
-    read -p "请选择 [1-6, 默认: 2]: " youtube_dns
-    youtube_dns=${youtube_dns:-2}
+        # 配置 YouTube
+        echo -e "${YELLOW}[4/5] YouTube 使用哪个 DNS 服务器?${NC}"
+        if [[ $custom_dns_configured == true ]]; then
+            echo -e "  ${CYAN}1)${NC} Cloudflare DNS (1.1.1.1)"
+            echo -e "  ${CYAN}2)${NC} Google DNS (8.8.8.8)"
+            echo -e "  ${CYAN}3)${NC} AdGuard DNS (94.140.14.14)"
+            echo -e "  ${CYAN}4)${NC} Quad9 DNS (9.9.9.9)"
+            echo -e "  ${CYAN}5)${NC} 本地 DNS"
+            echo -e "  ${CYAN}6)${NC} 自定义解锁 DNS (重新配置)"
+            echo -e "  ${CYAN}7)${NC} 使用刚才配置的自定义 DNS ${GREEN}($custom_dns_tag: $custom_dns_server)${NC}\n"
+            read -p "请选择 [1-7, 默认: 7]: " youtube_dns
+            youtube_dns=${youtube_dns:-7}
+        else
+            read -p "请选择 [1-6, 默认: 2]: " youtube_dns
+            youtube_dns=${youtube_dns:-2}
+        fi
 
-    if [[ $youtube_dns == 6 ]] && [[ $custom_dns_configured == false ]]; then
-        configure_custom_dns
-    fi
+        if [[ $youtube_dns == 6 ]] && [[ $custom_dns_configured == false ]]; then
+            configure_custom_dns
+        elif [[ $youtube_dns == 7 ]]; then
+            youtube_dns=6  # 使用已配置的自定义 DNS
+        fi
 
-    # 配置其他流媒体
-    echo -e "${YELLOW}[5/5] 其他流媒体使用哪个 DNS 服务器?${NC}"
-    read -p "请选择 [1-6, 默认: 1]: " other_dns
-    other_dns=${other_dns:-1}
+        # 配置其他流媒体
+        echo -e "${YELLOW}[5/5] 其他流媒体使用哪个 DNS 服务器?${NC}"
+        if [[ $custom_dns_configured == true ]]; then
+            echo -e "  ${CYAN}1)${NC} Cloudflare DNS (1.1.1.1)"
+            echo -e "  ${CYAN}2)${NC} Google DNS (8.8.8.8)"
+            echo -e "  ${CYAN}3)${NC} AdGuard DNS (94.140.14.14)"
+            echo -e "  ${CYAN}4)${NC} Quad9 DNS (9.9.9.9)"
+            echo -e "  ${CYAN}5)${NC} 本地 DNS"
+            echo -e "  ${CYAN}6)${NC} 自定义解锁 DNS (重新配置)"
+            echo -e "  ${CYAN}7)${NC} 使用刚才配置的自定义 DNS ${GREEN}($custom_dns_tag: $custom_dns_server)${NC}\n"
+            read -p "请选择 [1-7, 默认: 7]: " other_dns
+            other_dns=${other_dns:-7}
+        else
+            read -p "请选择 [1-6, 默认: 1]: " other_dns
+            other_dns=${other_dns:-1}
+        fi
 
-    if [[ $other_dns == 6 ]] && [[ $custom_dns_configured == false ]]; then
-        configure_custom_dns
+        if [[ $other_dns == 6 ]] && [[ $custom_dns_configured == false ]]; then
+            configure_custom_dns
+        elif [[ $other_dns == 7 ]]; then
+            other_dns=6  # 使用已配置的自定义 DNS
+        fi
+    else
+        # 已应用到所有平台，跳过询问
+        echo -e "${CYAN}跳过其他平台配置（已使用自定义 DNS: $custom_dns_tag）${NC}\n"
     fi
 
     # 配置解析策略
