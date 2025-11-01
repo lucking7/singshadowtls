@@ -2231,120 +2231,7 @@ change_dns_servers() {
     fi
 }
 
-# Function to configure streaming media unlock (单机优化 - 查看/清除配置)
-configure_streaming_unlock() {
-    if [[ ! -f /etc/sing-box/config.json ]]; then
-        echo -e "${RED}Error: Configuration file not found.${NC}"
-        return 1
-    fi
 
-    echo -e "\n${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║${NC}  ${YELLOW}流媒体解锁配置 (单机优化)${NC}                      ${BLUE}║${NC}"
-    echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}\n"
-
-    echo -e "${CYAN}此功能用于单机流媒体解锁优化${NC}"
-    echo -e "${YELLOW}注意: 三层架构解锁方案请使用:${NC}"
-    echo -e "  ${GREEN}•${NC} 解锁机: 选项 14 (DNS 解锁服务器)\n"
-
-    echo -e "${YELLOW}选择操作:${NC}"
-    echo -e "  ${CYAN}1)${NC} 查看当前流媒体解锁配置"
-    echo -e "  ${CYAN}2)${NC} 清除流媒体解锁配置"
-    echo -e "  ${CYAN}0)${NC} 返回主菜单\n"
-
-    read -p "$(echo -e "${YELLOW}请选择 [0-2]: ${NC}")" unlock_choice
-
-    case $unlock_choice in
-        1)
-            echo -e "\n${BLUE}当前流媒体解锁配置${NC}"
-            echo -e "${CYAN}═══════════════════════════════════════${NC}\n"
-
-            # 检查 FakeIP 配置
-            local has_fakeip=$(jq -e '.dns.servers[] | select(.type == "fakeip")' /etc/sing-box/config.json >/dev/null 2>&1; echo $?)
-            if [[ $has_fakeip -eq 0 ]]; then
-                echo -e "${GREEN}✓ FakeIP 模式: 已启用${NC}"
-                jq -r '.dns.servers[] | select(.type == "fakeip")' /etc/sing-box/config.json
-            else
-                echo -e "${YELLOW}○ FakeIP 模式: 未启用${NC}"
-            fi
-
-            echo -e "\n${CYAN}流媒体 DNS 规则:${NC}"
-            jq -r '.dns.rules[] | select(.rule_set != null) | select(.rule_set[] | contains("netflix") or contains("disney") or contains("media"))' /etc/sing-box/config.json 2>/dev/null || echo -e "${YELLOW}未找到流媒体规则${NC}"
-
-            echo -e "\n${CYAN}FakeIP 缓存状态:${NC}"
-            local fakeip_cache=$(jq -r '.experimental.cache_file.store_fakeip // false' /etc/sing-box/config.json)
-            if [[ "$fakeip_cache" == "true" ]]; then
-                echo -e "${GREEN}✓ 已启用${NC}"
-            else
-                echo -e "${YELLOW}○ 未启用${NC}"
-            fi
-
-            return 0
-            ;;
-
-        2)
-            echo -e "\n${YELLOW}确认要清除流媒体解锁配置吗?${NC}"
-            read -p "此操作将删除 FakeIP 服务器和流媒体 DNS 规则 [y/N]: " confirm
-
-            if [[ ! $confirm =~ ^[Yy]$ ]]; then
-                echo -e "${CYAN}已取消${NC}"
-                return 0
-            fi
-
-            # 备份当前配置
-            cp /etc/sing-box/config.json /etc/sing-box/config.json.backup.$(date +%Y%m%d_%H%M%S)
-            echo -e "${GREEN}✓ 已备份当前配置${NC}"
-
-            # 删除 FakeIP 服务器
-            echo -e "${CYAN}删除 FakeIP DNS 服务器...${NC}"
-            jq '.dns.servers = (.dns.servers | map(select(.type != "fakeip")))' \
-                /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
-
-            # 删除流媒体 DNS 规则
-            echo -e "${CYAN}删除流媒体 DNS 规则...${NC}"
-            jq '.dns.rules = (.dns.rules | map(select(
-                .rule_set == null or
-                (.rule_set | any(contains("netflix") or contains("disney") or contains("media")) | not)
-            )))' /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
-
-            # 禁用 FakeIP 缓存
-            echo -e "${CYAN}禁用 FakeIP 缓存...${NC}"
-            jq '.experimental.cache_file.store_fakeip = false' \
-                /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
-
-            echo -e "${GREEN}✓ 流媒体解锁配置已清除${NC}"
-
-            # 应用配置
-            chown sing-box:sing-box /etc/sing-box/config.json
-            chmod 640 /etc/sing-box/config.json
-
-            if ! format_config; then
-                echo -e "${RED}Error: Configuration validation failed.${NC}"
-                echo -e "${YELLOW}正在恢复备份...${NC}"
-                cp /etc/sing-box/config.json.backup.$(date +%Y%m%d_%H%M%S) /etc/sing-box/config.json
-                return 1
-            fi
-
-            echo -e "\n${CYAN}重启 Sing-Box 服务...${NC}"
-            systemctl restart sing-box
-
-            if systemctl is-active --quiet sing-box; then
-                echo -e "${GREEN}✓ 服务重启成功${NC}"
-            else
-                echo -e "${RED}✗ 服务重启失败${NC}"
-                return 1
-            fi
-            ;;
-
-        0)
-            return 0
-            ;;
-
-        *)
-            echo -e "${RED}无效选项${NC}"
-            return 1
-            ;;
-    esac
-}
 
 
 
@@ -3867,18 +3754,17 @@ show_menu() {
     echo -e "  ${CYAN}10)${NC} ShadowTLS 设置"
     echo -e "  ${CYAN}11)${NC} Shadowsocks 设置"
     echo -e "  ${CYAN}12)${NC} DNS 基础设置 ${YELLOW}(DNS 策略和服务器)${NC}"
-    echo -e "  ${CYAN}13)${NC} 流媒体解锁设置 ${YELLOW}(单机优化 - 查看/清除)${NC}"
-    echo -e "  ${CYAN}14)${NC} DNS 解锁服务器 ${YELLOW}(解锁机 - 部署 DNS 服务)${NC}\n"
+    echo -e "  ${CYAN}13)${NC} DNS 解锁服务器 ${YELLOW}(解锁机 - 部署 DNS 服务)${NC}\n"
 
     # 系统工具
     echo -e "${GREEN} 系统工具${NC}"
-    echo -e "  ${CYAN}15)${NC} 健康检查"
-    echo -e "  ${CYAN}16)${NC} 系统优化"
-    echo -e "  ${CYAN}17)${NC} 备份配置"
-    echo -e "  ${CYAN}18)${NC} 恢复配置\n"
+    echo -e "  ${CYAN}14)${NC} 健康检查"
+    echo -e "  ${CYAN}15)${NC} 系统优化"
+    echo -e "  ${CYAN}16)${NC} 备份配置"
+    echo -e "  ${CYAN}17)${NC} 恢复配置\n"
 
     echo -e "  ${CYAN}0)${NC} 退出\n"
-    echo -ne "${YELLOW}请选择 [0-18]: ${NC}"
+    echo -ne "${YELLOW}请选择 [0-17]: ${NC}"
 }
 
 # Function to display port submenu
@@ -4013,21 +3899,18 @@ main() {
                 show_dns_menu
                 ;;
             13)
-                configure_streaming_unlock
-                ;;
-            14)
                 configure_dns_unlock_server
                 ;;
-            15)
+            14)
                 health_check
                 ;;
-            16)
+            15)
                 optimize_system
                 ;;
-            17)
+            16)
                 backup_config
                 ;;
-            18)
+            17)
                 restore_config
                 ;;
             0)
