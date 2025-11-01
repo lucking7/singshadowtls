@@ -2857,7 +2857,11 @@ configure_dns_routing_rules() {
        --arg disney_st "$disney_strat" \
        --arg other_st "$other_strat" \
        '.dns.rules = [
-           (.dns.rules[] | select(.rule_set and (.rule_set | contains(["geosite-category-ads-all"])))),
+           (.dns.rules[] | select(
+               .rule_set and
+               ((.rule_set | type) == "array" and (.rule_set | contains(["geosite-category-ads-all"]))) or
+               ((.rule_set | type) == "string" and .rule_set == "geosite-category-ads-all")
+           )),
            {
                "rule_set": ["geosite-netflix"],
                "server": $netflix_srv,
@@ -2883,7 +2887,18 @@ configure_dns_routing_rules() {
                "server": $other_srv,
                "strategy": $other_st
            }
-       ] + (.dns.rules | map(select(.rule_set and (.rule_set | contains(["geoip-cn", "geosite-cn"])))))
+       ] + (.dns.rules | map(select(
+           .rule_set and (
+               ((.rule_set | type) == "array" and (
+                   (.rule_set | contains(["geoip-cn"])) or
+                   (.rule_set | contains(["geosite-cn"]))
+               )) or
+               ((.rule_set | type) == "string" and (
+                   .rule_set == "geoip-cn" or
+                   .rule_set == "geosite-cn"
+               ))
+           )
+       )))
        + [{"server": "dns_google", "strategy": "prefer_ipv4"}]' \
        /etc/sing-box/config.json > /tmp/config_temp.json && mv /tmp/config_temp.json /etc/sing-box/config.json
 
