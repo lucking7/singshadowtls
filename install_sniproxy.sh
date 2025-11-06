@@ -572,9 +572,9 @@ select_services() {
         exit 1
       fi
     else
-      log_error "非交互式模式需要指定服务" >&2
-      log_error "使用 --all-services 或 --services 'Netflix,Disney+' 或设置环境变量 SNIPROXY_SERVICES" >&2
-      exit 1
+      # 非交互式模式下，如果没有指定服务，默认选择所有服务
+      log_info "非交互式模式未指定服务,默认选择所有服务" >&2
+      selected_services=("${services[@]}")
     fi
   else
     # 交互式模式
