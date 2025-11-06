@@ -218,7 +218,12 @@ parse_arguments() {
 
 # 检测是否为交互式环境
 is_interactive() {
-  [[ -t 0 ]] && [[ -z "$NON_INTERACTIVE" ]]
+  # 检查是否显式设置为非交互式
+  [[ -n "$NON_INTERACTIVE" ]] && return 1
+
+  # 检查 stdin 是否是终端，或者 /dev/tty 是否可用
+  # 这样即使通过 curl | bash 执行，只要终端可用就能交互
+  [[ -t 0 ]] || [[ -c /dev/tty ]]
 }
 
 # 日志函数（遵循 R4.7.1）
@@ -545,7 +550,7 @@ select_services() {
   local -a selected_services=()
 
   # 非交互式模式处理
-  if ! is_interactive || [[ -n "$NON_INTERACTIVE" ]]; then
+  if ! is_interactive; then
     log_info "非交互式模式,处理服务选择..." >&2
 
     # 优先级: --all-services > --services > 环境变量 SNIPROXY_SERVICES
