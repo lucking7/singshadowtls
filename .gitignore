@@ -1,0 +1,5 @@
+# 忽略所有.json配置文件
+*.json
+
+# 忽略所有backup备份文件
+*.backup.DS_Store
