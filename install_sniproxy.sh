@@ -1468,6 +1468,27 @@ test_smartdns() {
     ss -ulnp | grep smartdns || true
   fi
 
+  log_info "测试 DNS 查询功能..."
+  # 测试普通域名解析（应该通过上游 DNS）
+  if nslookup google.com 127.0.0.1 &>/dev/null; then
+    log "✓ DNS 查询功能正常"
+  else
+    log_error "✗ DNS 查询失败"
+    log_error "SmartDNS 可能配置错误，建议检查配置文件"
+    return 1
+  fi
+
+  # 测试流媒体域名解析（应该返回本机 IP）
+  if [[ -n "$SERVER_IP" ]]; then
+    log_info "测试流媒体域名解析..."
+    local test_result=$(nslookup netflix.com 127.0.0.1 2>/dev/null | grep -A1 "Name:" | grep "Address:" | awk '{print $2}')
+    if [[ "$test_result" == "$SERVER_IP" ]]; then
+      log "✓ 流媒体域名解析正确 (netflix.com -> $SERVER_IP)"
+    else
+      log_warn "⚠ 流媒体域名解析可能未生效 (期望: $SERVER_IP, 实际: $test_result)"
+    fi
+  fi
+
   echo ""
   log "测试完成"
 }
@@ -1690,7 +1711,11 @@ EOF
         }
 
         # 测试 SmartDNS
-        test_smartdns
+        if ! test_smartdns; then
+            log_error "SmartDNS 测试失败，不会修改系统 DNS 配置"
+            log_warn "请检查 SmartDNS 配置并手动重启: systemctl restart smartdns"
+            return 1
+        fi
 
         # 如果是本地模式，自动配置本机 DNS
         if [[ "$SMARTDNS_MODE" == "local" ]]; then
@@ -1700,12 +1725,20 @@ EOF
             # 备份 resolv.conf
             if [[ -f /etc/resolv.conf ]]; then
                 cp /etc/resolv.conf "$BACKUP_DIR/resolv.conf"
-                log_info "已备份 /etc/resolv.conf"
+                log_info "已备份 /etc/resolv.conf 到 $BACKUP_DIR/resolv.conf"
             fi
 
-            # 修改 DNS
-            echo "nameserver 127.0.0.1" > /etc/resolv.conf
-            log "本机 DNS 已配置为 127.0.0.1"
+            # 修改 DNS，添加备用 DNS 服务器
+            cat > /etc/resolv.conf << EOF
+# SmartDNS 配置 - 自动生成于 $(date)
+# 主 DNS: 本地 SmartDNS (提供流媒体解锁)
+nameserver 127.0.0.1
+
+# 备用 DNS: 防止 SmartDNS 服务崩溃时失去连接
+nameserver 8.8.8.8
+nameserver 1.1.1.1
+EOF
+            log "本机 DNS 已配置为 127.0.0.1 (备用: 8.8.8.8, 1.1.1.1)"
         fi
     fi
 
