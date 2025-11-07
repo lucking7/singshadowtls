@@ -1,4 +1,23 @@
 #!/bin/bash
+#
+# Sing-Box & ShadowTLS 管理脚本
+#
+# 脚本定位：
+#   此脚本用于被解锁机（需要访问流媒体的服务器）
+#   提供 Sing-Box 安装、配置管理和 DNS 分流客户端部署
+#
+# 解锁方案：
+#   解锁机: SNI Proxy + SmartDNS (使用 install_sniproxy.sh 部署)
+#   被解锁机: Sing-Box DNS 分流客户端 (使用此脚本的选项 13 部署)
+#
+# 主要功能：
+#   - ShadowTLS/Shadowsocks 代理服务器部署
+#   - DNS 分流客户端配置（连接到解锁机 SmartDNS）
+#   - 系统优化和健康检查
+#
+# 作者: lucking7@github.com
+# 仓库: https://github.com/lucking7/singshadowtls
+#
 
 # 错误处理
 set -uo pipefail
@@ -4360,8 +4379,7 @@ show_menu() {
     echo -e "  ${CYAN}10)${NC} ShadowTLS 设置"
     echo -e "  ${CYAN}11)${NC} Shadowsocks 设置"
     echo -e "  ${CYAN}12)${NC} DNS 基础设置 ${YELLOW}(DNS 策略和服务器)${NC}"
-    echo -e "  ${CYAN}13)${NC} DNS 解锁服务器 ${YELLOW}(解锁机 - 部署 DNS 服务)${NC}"
-    echo -e "  ${CYAN}18)${NC} DNS 分流客户端 ${YELLOW}(被解锁机 - 连接到 SmartDNS)${NC}\n"
+    echo -e "  ${CYAN}13)${NC} DNS 分流客户端 ${YELLOW}(连接到解锁机 SmartDNS)${NC}\n"
 
     # 系统工具
     echo -e "${GREEN} 系统工具${NC}"
@@ -4371,7 +4389,20 @@ show_menu() {
     echo -e "  ${CYAN}17)${NC} 恢复配置\n"
 
     echo -e "  ${CYAN}0)${NC} 退出\n"
-    echo -ne "${YELLOW}请选择 [0-18]: ${NC}"
+
+    # 添加使用说明
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${YELLOW}💡 使用说明${NC}"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}此脚本用于被解锁机（需要访问流媒体的服务器）${NC}"
+    echo -e ""
+    echo -e "${YELLOW}解锁机部署：${NC}"
+    echo -e "  使用 install_sniproxy.sh 部署 SNI Proxy + SmartDNS"
+    echo -e "  ${GREEN}curl -fsSL https://raw.githubusercontent.com/lucking7/singshadowtls/main/install_sniproxy.sh | \\${NC}"
+    echo -e "  ${GREEN}  sudo bash -s -- -y -a --enable-smartdns --smartdns-mode=server${NC}"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
+
+    echo -ne "${YELLOW}请选择 [0-17]: ${NC}"
 }
 
 # Function to display port submenu
@@ -4506,9 +4537,6 @@ main() {
                 show_dns_menu
                 ;;
             13)
-                configure_dns_unlock_server
-                ;;
-            18)
                 configure_dns_unlock_client
                 ;;
             14)
