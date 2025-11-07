@@ -92,14 +92,49 @@ log() {
 error_handler() {
     local exit_code=$?
     local line_no=${1:-$LINENO}
-    
+
     log ERROR "错误发生在第 $line_no 行，退出码: $exit_code"
-    
+
     # 提示用户查看日志
     if [[ $exit_code -ne 0 ]]; then
         echo -e "${YELLOW}详细错误信息已记录到: $LOG_FILE${NC}"
         echo -e "${YELLOW}使用命令查看: tail -n 50 $LOG_FILE${NC}"
     fi
+}
+
+# 带上下文的错误提示函数
+# 用法: error_with_context "错误消息" "上下文信息" "建议措施"
+error_with_context() {
+    local error_msg="$1"
+    local context="${2:-}"
+    local suggestion="${3:-}"
+
+    echo ""
+    echo -e "${RED}╔════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${RED}║${NC}  ${RED}✗ 错误${NC}                                               ${RED}║${NC}"
+    echo -e "${RED}╚════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${YELLOW}错误信息：${NC}"
+    echo -e "  ${error_msg}"
+
+    if [[ -n "$context" ]]; then
+        echo ""
+        echo -e "${YELLOW}问题原因：${NC}"
+        echo -e "  ${context}"
+    fi
+
+    if [[ -n "$suggestion" ]]; then
+        echo ""
+        echo -e "${YELLOW}建议措施：${NC}"
+        echo -e "  ${suggestion}"
+    fi
+
+    echo ""
+    echo -e "${CYAN}详细日志：${NC}${LOG_FILE}"
+    echo ""
+
+    # 同时记录到日志
+    log ERROR "$error_msg | 上下文: $context | 建议: $suggestion"
 }
 
 # 设置错误捕获
@@ -155,7 +190,10 @@ init_logging
 check_root() {
     if [[ $EUID -ne 0 ]]; then
         log ERROR "脚本必须以 root 权限运行"
-        echo -e "${RED}错误: 此脚本必须以 root 权限运行${NC}"
+        error_with_context \
+            "此脚本必须以 root 权限运行" \
+            "当前用户 UID: $EUID (非 root 用户)" \
+            "请使用以下命令之一重新运行:\n  • sudo bash $0\n  • su - && bash $0"
         exit 1
     fi
     log INFO "Root 权限检查通过"
@@ -166,12 +204,18 @@ check_system() {
     log INFO "检查系统兼容性..."
     if [[ -f /etc/redhat-release ]]; then
         log ERROR "不支持的系统: RedHat/CentOS"
-        echo -e "${RED}错误: 此脚本仅支持 Debian/Ubuntu 系统${NC}"
+        error_with_context \
+            "此脚本仅支持 Debian/Ubuntu 系统" \
+            "检测到 RedHat/CentOS 系统" \
+            "请在 Debian 或 Ubuntu 系统上运行此脚本"
         exit 1
     fi
     if ! command -v systemctl >/dev/null 2>&1; then
         log ERROR "systemctl 未找到"
-        echo -e "${RED}错误: 未找到 systemctl，需要 systemd 系统${NC}"
+        error_with_context \
+            "未找到 systemctl 命令" \
+            "此脚本需要 systemd 系统管理器" \
+            "请确保系统已安装 systemd 并且 systemctl 在 PATH 中"
         exit 1
     fi
     log SUCCESS "系统兼容性检查通过"
@@ -189,9 +233,12 @@ install_dependencies() {
     if [[ $update_needed -eq 1 ]]; then
         echo -e "${CYAN}更新软件包列表...${NC}"
         log INFO "执行 apt update"
-        apt update || { 
+        apt update || {
             log ERROR "apt update 失败"
-            echo -e "${RED}错误: apt update 失败，请检查网络和软件源${NC}"
+            error_with_context \
+                "软件包列表更新失败" \
+                "无法从软件源获取软件包信息" \
+                "请检查以下内容:\n  • 网络连接是否正常\n  • /etc/apt/sources.list 配置是否正确\n  • 运行 'apt update' 查看详细错误\n  • 尝试更换软件源镜像"
             exit 1
         }
     else
@@ -209,9 +256,12 @@ install_dependencies() {
     if [[ ${#packages_to_install[@]} -gt 0 ]]; then
         echo -e "${CYAN}安装缺失的依赖: ${packages_to_install[*]}...${NC}"
         log INFO "安装软件包: ${packages_to_install[*]}"
-        apt install -y "${packages_to_install[@]}" || { 
+        apt install -y "${packages_to_install[@]}" || {
             log ERROR "安装依赖失败: ${packages_to_install[*]}"
-            echo -e "${RED}错误: 安装依赖失败 (${packages_to_install[*]})${NC}"
+            error_with_context \
+                "依赖软件包安装失败" \
+                "无法安装 ${packages_to_install[*]}" \
+                "请尝试以下操作:\n  • 运行 'apt update' 更新软件包列表\n  • 检查磁盘空间: df -h\n  • 查看详细错误: apt install -y ${packages_to_install[*]}\n  • 检查是否有软件包冲突"
             exit 1
         }
         log SUCCESS "依赖安装成功"
@@ -3937,8 +3987,10 @@ EOFCONFIG
         echo -e "  2. 测试 DNS 解析: ${CYAN}nslookup netflix.com${NC}"
         echo -e "  3. 测试流媒体访问\n"
     else
-        echo -e "${RED}✗ sing-box 服务启动失败${NC}"
-        echo -e "${YELLOW}请检查日志: ${CYAN}journalctl -u sing-box -n 50${NC}\n"
+        error_with_context \
+            "sing-box 服务启动失败" \
+            "DNS 分流客户端配置已生成但服务无法启动" \
+            "请执行以下诊断步骤:\n  • 查看服务日志: journalctl -u sing-box -n 50\n  • 检查配置语法: sing-box check -c /etc/sing-box/config.json\n  • 检查端口占用: ss -tulpn | grep :53\n  • 查看服务状态: systemctl status sing-box"
         return 1
     fi
 }
@@ -4407,85 +4459,110 @@ show_menu() {
 
 # Function to display port submenu
 show_port_menu() {
-    echo -e "${CYAN}1) Change Port (Smart adaptation for Pure SS/STLS Separated/STLS Shared)${NC}"
-    echo -e "${CYAN}2) Change Shadowsocks UDP Port (For Pure SS or STLS Separated modes)${NC}"
-    echo -e "${CYAN}0) Back to Main Menu${NC}"
-    echo -ne "${YELLOW}Please select [0-2]: ${NC}"
+    echo -e "\n${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║${NC}  ${YELLOW}端口配置${NC}                                        ${BLUE}║${NC}"
+    echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}\n"
+
+    echo -e "  ${CYAN}1)${NC} 修改主端口 ${YELLOW}(智能适配 Pure SS/STLS 分离/STLS 共享模式)${NC}"
+    echo -e "  ${CYAN}2)${NC} 修改 Shadowsocks UDP 端口 ${YELLOW}(仅 Pure SS/STLS 分离模式)${NC}"
+    echo -e "  ${CYAN}0)${NC} 返回主菜单\n"
+
+    echo -ne "${YELLOW}请选择 [0-2]: ${NC}"
     read -p "" port_choice
-    
+
     case $port_choice in
-        1) change_port ;; # This function is now mode-aware
-        2) change_ss_udp_port ;; # This function is also mode-aware
+        1) change_port ;;
+        2) change_ss_udp_port ;;
         0) return ;;
-        *) echo -e "${RED}Invalid option.${NC}" ;;
+        *) echo -e "${RED}无效选择，请输入 0-2 之间的数字${NC}" ;;
     esac
 }
 
 # Function to display password submenu
 show_password_menu() {
-    echo -e "${CYAN}1) Change All Passwords (ShadowTLS and Shadowsocks)${NC}"
-    echo -e "${CYAN}2) Change ShadowTLS Password Only${NC}"
-    echo -e "${CYAN}3) Change Shadowsocks Password Only (Applied to all SS configs)${NC}"
-    echo -e "${CYAN}0) Back to Main Menu${NC}"
-    echo -ne "${YELLOW}Please select [0-3]: ${NC}"
+    echo -e "\n${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║${NC}  ${YELLOW}密码管理${NC}                                        ${BLUE}║${NC}"
+    echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}\n"
+
+    echo -e "  ${CYAN}1)${NC} 修改所有密码 ${YELLOW}(ShadowTLS 和 Shadowsocks)${NC}"
+    echo -e "  ${CYAN}2)${NC} 仅修改 ShadowTLS 密码"
+    echo -e "  ${CYAN}3)${NC} 仅修改 Shadowsocks 密码 ${YELLOW}(应用到所有 SS 配置)${NC}"
+    echo -e "  ${CYAN}0)${NC} 返回主菜单\n"
+
+    echo -ne "${YELLOW}请选择 [0-3]: ${NC}"
     read -p "" pass_choice
-    
+
     case $pass_choice in
-        1) change_passwords ;; # Handles both if STLS exists
+        1) change_passwords ;;
         2) change_shadowtls_password ;;
-        3) change_shadowsocks_password_only ;; # New function needed
+        3) change_shadowsocks_password_only ;;
         0) return ;;
-        *) echo -e "${RED}Invalid option.${NC}" ;;
+        *) echo -e "${RED}无效选择，请输入 0-3 之间的数字${NC}" ;;
     esac
 }
 
 # Function to display shadowtls submenu
 show_shadowtls_menu() {
-    echo -e "${CYAN}1) Change ShadowTLS SNI Domain${NC}"
-    echo -e "${CYAN}2) Change ShadowTLS Password${NC}"
-    echo -e "${CYAN}0) Back to Main Menu${NC}"
-    echo -ne "${YELLOW}Please select [0-2]: ${NC}"
+    echo -e "\n${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║${NC}  ${YELLOW}ShadowTLS 设置${NC}                                   ${BLUE}║${NC}"
+    echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}\n"
+
+    echo -e "  ${CYAN}1)${NC} 修改 ShadowTLS SNI 域名"
+    echo -e "  ${CYAN}2)${NC} 修改 ShadowTLS 密码"
+    echo -e "  ${CYAN}0)${NC} 返回主菜单\n"
+
+    echo -ne "${YELLOW}请选择 [0-2]: ${NC}"
     read -p "" stls_choice
-    
+
     case $stls_choice in
         1) change_shadowtls_sni ;;
         2) change_shadowtls_password ;;
         0) return ;;
-        *) echo -e "${RED}Invalid option.${NC}" ;;
+        *) echo -e "${RED}无效选择，请输入 0-2 之间的数字${NC}" ;;
     esac
 }
 
 # Function to display shadowsocks submenu
 show_shadowsocks_menu() {
-    echo -e "${CYAN}1) Change Shadowsocks Encryption Method (Will reset password)${NC}"
-    echo -e "${CYAN}2) Change Shadowsocks UDP Port (See instructions)${NC}"
-    echo -e "${CYAN}3) Change Shadowsocks Password Only${NC}"
-    echo -e "${CYAN}0) Back to Main Menu${NC}"
-    echo -ne "${YELLOW}Please select [0-3]: ${NC}"
+    echo -e "\n${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║${NC}  ${YELLOW}Shadowsocks 设置${NC}                                 ${BLUE}║${NC}"
+    echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}\n"
+
+    echo -e "  ${CYAN}1)${NC} 修改 Shadowsocks 加密方法 ${YELLOW}(将重置密码)${NC}"
+    echo -e "  ${CYAN}2)${NC} 修改 Shadowsocks UDP 端口 ${YELLOW}(请查看说明)${NC}"
+    echo -e "  ${CYAN}3)${NC} 仅修改 Shadowsocks 密码"
+    echo -e "  ${CYAN}0)${NC} 返回主菜单\n"
+
+    echo -ne "${YELLOW}请选择 [0-3]: ${NC}"
     read -p "" ss_choice
-    
+
     case $ss_choice in
         1) change_ss_method ;;
         2) change_ss_udp_port ;;
-        3) change_shadowsocks_password_only ;; # New function needed
+        3) change_shadowsocks_password_only ;;
         0) return ;;
-        *) echo -e "${RED}Invalid option.${NC}" ;;
+        *) echo -e "${RED}无效选择，请输入 0-3 之间的数字${NC}" ;;
     esac
 }
 
 # Function to display DNS submenu
 show_dns_menu() {
-    echo -e "${CYAN}1) Manage DNS Strategies${NC}"
-    echo -e "${CYAN}2) Change DNS Servers${NC}"
-    echo -e "${CYAN}0) Back to Main Menu${NC}"
-    echo -ne "${YELLOW}Please select [0-2]: ${NC}"
+    echo -e "\n${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║${NC}  ${YELLOW}DNS 配置${NC}                                          ${BLUE}║${NC}"
+    echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}\n"
+
+    echo -e "  ${CYAN}1)${NC} 管理 DNS 策略"
+    echo -e "  ${CYAN}2)${NC} 更改 DNS 服务器"
+    echo -e "  ${CYAN}0)${NC} 返回主菜单\n"
+
+    echo -ne "${YELLOW}请选择 [0-2]: ${NC}"
     read -p "" dns_choice
-    
+
     case $dns_choice in
         1) manage_dns_strategies ;;
         2) change_dns_servers ;;
         0) return ;;
-        *) echo -e "${RED}Invalid option.${NC}" ;;
+        *) echo -e "${RED}无效选择，请输入 0-2 之间的数字${NC}" ;;
     esac
 }
 
