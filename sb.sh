@@ -2438,11 +2438,11 @@ change_dns_servers() {
     
     echo -e "\n${BLUE}Change DNS Servers${NC}"
     echo -e "${CYAN}Current DNS servers (first few):${NC}"
-    jq -r '.dns.servers[:3][] | "  - \(.tag // \"N/A\"): \(.server // \"N/A\")"' /etc/sing-box/config.json | sed 's/^/  /' | sed 's/- /${CYAN}- /g; s/: /: ${MAGENTA}/g' # Colorize output
+    jq -r '.dns.servers[:3][] | "  - " + (.tag // "N/A") + ": " + (.address // .server // "N/A")' /etc/sing-box/config.json 2>/dev/null || echo "  (No DNS servers configured)"
     
     echo -e "\n${YELLOW}Select DNS server to change or add:${NC}"
-    echo -e "  ${CYAN}1) Change primary DNS (currently: ${MAGENTA}$(jq -r '.dns.servers[0].server' /etc/sing-box/config.json)${CYAN})${NC}"
-    echo -e "  ${CYAN}2) Change secondary DNS (currently: ${MAGENTA}$(jq -r '.dns.servers[1].server' /etc/sing-box/config.json)${CYAN})${NC}"
+    echo -e "  ${CYAN}1) Change primary DNS (currently: ${MAGENTA}$(jq -r '.dns.servers[0].server // .dns.servers[0].address // "Not configured"' /etc/sing-box/config.json 2>/dev/null)${CYAN})${NC}"
+    echo -e "  ${CYAN}2) Change secondary DNS (currently: ${MAGENTA}$(jq -r '.dns.servers[1].server // .dns.servers[1].address // "Not configured"' /etc/sing-box/config.json 2>/dev/null)${CYAN})${NC}"
     echo -e "  ${CYAN}3) Add custom DNS server${NC}"
     
     read -p "$(echo -e "${YELLOW}Enter your choice [1-3]: ${NC}")" dns_choice
@@ -2469,7 +2469,19 @@ change_dns_servers() {
                     echo -e "${RED}Invalid IP address format for custom DNS.${NC}"; return 1;
                  fi
             fi
-            jq ".dns.servers[$server_index].server = \"$new_server\"" /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+            # 检测当前 DNS 服务器使用的字段格式
+            local current_format=$(jq -r ".dns.servers[$server_index] | if has(\"server\") then \"server\" elif has(\"address\") then \"address\" else \"unknown\" end" /etc/sing-box/config.json)
+
+            if [[ "$current_format" == "server" ]]; then
+                jq ".dns.servers[$server_index].server = \"$new_server\"" /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+            elif [[ "$current_format" == "address" ]]; then
+                # 对于 address 格式，需要保持协议前缀
+                local protocol=$(jq -r ".dns.servers[$server_index].address" /etc/sing-box/config.json | sed -E 's|^([a-z]+)://.*|\1|')
+                jq ".dns.servers[$server_index].address = \"${protocol}://$new_server\"" /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
+            else
+                echo -e "${RED}Error: Unknown DNS server format${NC}"
+                return 1
+            fi
             echo -e "${GREEN}${server_desc^} DNS server updated to: ${MAGENTA}$new_server${NC}"
             ;;
         3)
