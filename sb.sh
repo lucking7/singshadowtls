@@ -146,22 +146,151 @@ show_progress() {
     local total=$2
     local message="${3:-处理中}"
     local width=50
-    
+
     if [[ $total -eq 0 ]]; then
         return
     fi
-    
+
     local percentage=$((current * 100 / total))
     local filled=$((width * current / total))
-    
+
     printf "\r%s [" "$message"
     printf "%${filled}s" | tr ' ' '='
     printf "%$((width - filled))s" | tr ' ' '-'
     printf "] %d%%" $percentage
-    
+
     if [[ $current -eq $total ]]; then
         echo
     fi
+}
+
+# 等待动画函数（用于服务启动等操作）
+wait_with_spinner() {
+    local pid=$1
+    local message="${2:-处理中}"
+    local delay=0.1
+    local spinstr='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+
+    while kill -0 "$pid" 2>/dev/null; do
+        local temp=${spinstr#?}
+        printf "\r${CYAN}%s${NC} %c " "$message" "$spinstr"
+        spinstr=$temp${spinstr%"$temp"}
+        sleep $delay
+    done
+    printf "\r"
+}
+
+# 服务启动等待函数（带倒计时）
+wait_for_service() {
+    local service_name="$1"
+    local max_wait="${2:-10}"
+    local message="${3:-等待服务启动}"
+
+    echo -ne "${CYAN}${message}${NC}"
+
+    for ((i=1; i<=max_wait; i++)); do
+        if systemctl is-active --quiet "$service_name"; then
+            echo -e "\r${GREEN}✓ ${message}完成 (${i}秒)${NC}$(printf '%*s' 20 '')"
+            return 0
+        fi
+        echo -ne "\r${CYAN}${message}... ${i}/${max_wait}秒${NC}"
+        sleep 1
+    done
+
+    echo -e "\r${RED}✗ ${message}超时 (${max_wait}秒)${NC}$(printf '%*s' 20 '')"
+    return 1
+}
+
+# IP 地址验证函数
+validate_ip() {
+    local ip="$1"
+    local var_name="${2:-IP 地址}"
+
+    # 检查是否为空
+    if [[ -z "$ip" ]]; then
+        echo -e "${RED}✗ ${var_name}不能为空${NC}"
+        return 1
+    fi
+
+    # 检查基本格式
+    if ! [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        echo -e "${RED}✗ ${var_name}格式无效${NC}"
+        echo -e "${YELLOW}  正确格式示例: 192.168.1.1${NC}"
+        return 1
+    fi
+
+    # 检查每个字段的范围 (0-255)
+    local IFS='.'
+    read -ra ADDR <<< "$ip"
+    for i in "${ADDR[@]}"; do
+        if ((i < 0 || i > 255)); then
+            echo -e "${RED}✗ ${var_name}范围无效 (每段必须在 0-255 之间)${NC}"
+            echo -e "${YELLOW}  输入的值: $ip${NC}"
+            return 1
+        fi
+    done
+
+    echo -e "${GREEN}✓ ${var_name}格式正确${NC}"
+    return 0
+}
+
+# 端口验证函数
+validate_port() {
+    local port="$1"
+    local var_name="${2:-端口}"
+
+    # 检查是否为空
+    if [[ -z "$port" ]]; then
+        echo -e "${RED}✗ ${var_name}不能为空${NC}"
+        return 1
+    fi
+
+    # 检查是否为数字
+    if ! [[ "$port" =~ ^[0-9]+$ ]]; then
+        echo -e "${RED}✗ ${var_name}必须是数字${NC}"
+        echo -e "${YELLOW}  正确范围: 1-65535${NC}"
+        return 1
+    fi
+
+    # 检查范围
+    if ((port < 1 || port > 65535)); then
+        echo -e "${RED}✗ ${var_name}超出范围${NC}"
+        echo -e "${YELLOW}  正确范围: 1-65535${NC}"
+        echo -e "${YELLOW}  输入的值: $port${NC}"
+        return 1
+    fi
+
+    # 检查是否为特权端口
+    if ((port < 1024)); then
+        echo -e "${YELLOW}⚠ ${var_name} $port 是特权端口 (需要 root 权限)${NC}"
+    fi
+
+    echo -e "${GREEN}✓ ${var_name}格式正确${NC}"
+    return 0
+}
+
+# 域名验证函数
+validate_domain() {
+    local domain="$1"
+    local var_name="${2:-域名}"
+
+    # 检查是否为空
+    if [[ -z "$domain" ]]; then
+        echo -e "${RED}✗ ${var_name}不能为空${NC}"
+        return 1
+    fi
+
+    # 基本域名格式检查
+    # 允许: 字母、数字、连字符、点号
+    # 不能以连字符或点号开始/结束
+    if ! [[ $domain =~ ^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$ ]]; then
+        echo -e "${RED}✗ ${var_name}格式无效${NC}"
+        echo -e "${YELLOW}  正确格式示例: example.com${NC}"
+        return 1
+    fi
+
+    echo -e "${GREEN}✓ ${var_name}格式正确${NC}"
+    return 0
 }
 
 # 操作确认函数
@@ -841,12 +970,14 @@ install_sing_box() {
     echo -e "${GREEN}Latest Sing-Box beta version: ${MAGENTA}$VERSION${NC}"
 
     echo -e "${CYAN}Downloading Sing-Box beta ${MAGENTA}$VERSION${CYAN} for ${MAGENTA}$ARCH${CYAN}...${NC}"
-    curl -Lo sing-box.deb "https://github.com/SagerNet/sing-box/releases/download/v${VERSION}/sing-box_${VERSION}_linux_${ARCH}.deb"
+    echo -e "${YELLOW}下载进度：${NC}"
+    curl -# -Lo sing-box.deb "https://github.com/SagerNet/sing-box/releases/download/v${VERSION}/sing-box_${VERSION}_linux_${ARCH}.deb"
     if [[ $? -ne 0 ]]; then
         echo -e "${RED}Error: Failed to download Sing-Box .deb package.${NC}"
         rm -f sing-box.deb
         exit 1
     fi
+    echo -e "${GREEN}✓ 下载完成${NC}\n"
 
     echo -e "${CYAN}Installing Sing-Box package (sing-box.deb)...${NC}"
     dpkg -i sing-box.deb
@@ -3676,21 +3807,30 @@ deploy_dns_unlock_client() {
 
     # 提示输入解锁机 IP
     echo -e "${YELLOW}解锁机配置${NC}"
-    read -p "请输入解锁机 IP 地址: " unlock_ip
+    while true; do
+        read -p "请输入解锁机 IP 地址: " unlock_ip
+        echo ""
+        if validate_ip "$unlock_ip" "解锁机 IP"; then
+            break
+        fi
+        echo ""
+    done
 
-    if [[ -z "$unlock_ip" ]]; then
-        echo -e "${RED}错误: 解锁机 IP 不能为空${NC}"
+    # 输入端口并验证
+    while true; do
+        read -p "解锁机 SmartDNS 端口 [默认: 53]: " unlock_port
+        unlock_port=${unlock_port:-53}
+        echo ""
+        if validate_port "$unlock_port" "SmartDNS 端口"; then
+            break
+        fi
+        echo ""
+    done
+
+    # 执行连通性检查
+    if ! check_unlock_server_connectivity "$unlock_ip" "$unlock_port"; then
         return 1
     fi
-
-    # 验证 IP 格式
-    if ! [[ $unlock_ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-        echo -e "${RED}错误: IP 地址格式无效${NC}"
-        return 1
-    fi
-
-    read -p "解锁机 SmartDNS 端口 [默认: 53]: " unlock_port
-    unlock_port=${unlock_port:-53}
 
     # 选择流媒体服务
     echo -e "\n${YELLOW}流媒体服务选择${NC}"
@@ -3793,16 +3933,22 @@ deploy_dns_unlock_client() {
     enable_adblock=${enable_adblock:-y}
 
     # 生成配置文件
-    echo -e "\n${CYAN}生成 sing-box 配置文件...${NC}"
+    echo -e "\n${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║${NC}  ${YELLOW}生成 sing-box 配置文件${NC}                           ${BLUE}║${NC}"
+    echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}\n"
 
     # 备份现有配置
+    echo -e "${CYAN}[1/4] 备份现有配置...${NC}"
     if [[ -f /etc/sing-box/config.json ]]; then
         backup_file="/etc/sing-box/config.json.bak.$(date +%Y%m%d_%H%M%S)"
         cp /etc/sing-box/config.json "$backup_file"
-        echo -e "${GREEN}✓ 已备份现有配置到: $backup_file${NC}"
+        echo -e "${GREEN}✓ 已备份到: $backup_file${NC}\n"
+    else
+        echo -e "${YELLOW}无需备份（配置文件不存在）${NC}\n"
     fi
 
     # 构建 DNS servers 数组
+    echo -e "${CYAN}[2/4] 生成 DNS 配置...${NC}"
     cat > /etc/sing-box/config.json << 'EOFCONFIG'
 {
   "log": {
@@ -3835,10 +3981,14 @@ deploy_dns_unlock_client() {
 EOFCONFIG
 
     # 替换变量
+    echo -e "${GREEN}✓ DNS 配置生成完成${NC}\n"
+
+    echo -e "${CYAN}[3/4] 应用配置参数...${NC}"
     sed -i "s/UNLOCK_IP/$unlock_ip/g" /etc/sing-box/config.json
     sed -i "s/UNLOCK_PORT/$unlock_port/g" /etc/sing-box/config.json
     sed -i "s/PUBLIC_DNS_TAG/$public_dns_tag/g" /etc/sing-box/config.json
     sed -i "s/PUBLIC_DNS_SERVER/$public_dns_server/g" /etc/sing-box/config.json
+    echo -e "${GREEN}✓ 配置参数应用完成${NC}\n"
 
     # 添加广告拦截规则
     if [[ $enable_adblock =~ ^[Yy]$ ]]; then
@@ -3934,10 +4084,7 @@ EOFCONFIG
 }
 EOFCONFIG
 
-    echo -e "${GREEN}✓ 配置文件生成完成${NC}\n"
-
-    # 验证配置文件
-    echo -e "${CYAN}验证配置文件...${NC}"
+    echo -e "${CYAN}[4/4] 验证配置文件...${NC}"
     if ! sing-box check -c /etc/sing-box/config.json; then
         echo -e "${RED}✗ 配置文件验证失败${NC}"
         echo -e "${YELLOW}正在恢复备份配置...${NC}"
@@ -3965,11 +4112,8 @@ EOFCONFIG
     systemctl restart sing-box
 
     # 等待服务启动
-    sleep 2
-
-    # 检查服务状态
-    if systemctl is-active --quiet sing-box; then
-        echo -e "${GREEN}✓ sing-box 服务启动成功${NC}\n"
+    if wait_for_service "sing-box" 10 "等待 sing-box 服务启动"; then
+        echo ""
 
         # 显示配置摘要
         echo -e "${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
@@ -3992,6 +4136,104 @@ EOFCONFIG
             "DNS 分流客户端配置已生成但服务无法启动" \
             "请执行以下诊断步骤:\n  • 查看服务日志: journalctl -u sing-box -n 50\n  • 检查配置语法: sing-box check -c /etc/sing-box/config.json\n  • 检查端口占用: ss -tulpn | grep :53\n  • 查看服务状态: systemctl status sing-box"
         return 1
+    fi
+}
+
+# Function to check unlock server connectivity (pre-deployment check)
+check_unlock_server_connectivity() {
+    local server_ip="$1"
+    local server_port="${2:-53}"
+
+    echo -e "\n${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║${NC}  ${YELLOW}解锁机连通性检查${NC}                                 ${BLUE}║${NC}"
+    echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}\n"
+
+    local all_checks_passed=true
+
+    # 检查 1: Ping 测试
+    echo -e "${CYAN}[1/3] 网络连通性测试...${NC}"
+    if ping -c 2 -W 3 "$server_ip" >/dev/null 2>&1; then
+        echo -e "${GREEN}✓ 能够 ping 通解锁机 ($server_ip)${NC}\n"
+    else
+        echo -e "${RED}✗ 无法 ping 通解锁机 ($server_ip)${NC}"
+        echo -e "${YELLOW}  可能原因: 网络不通或服务器禁止 ICMP${NC}\n"
+        all_checks_passed=false
+    fi
+
+    # 检查 2: 端口连通性测试
+    echo -e "${CYAN}[2/3] 端口 $server_port 连通性测试...${NC}"
+
+    # 尝试使用 nc（netcat）
+    if command -v nc >/dev/null 2>&1; then
+        if timeout 5 nc -zv "$server_ip" "$server_port" 2>&1 | grep -q succeeded; then
+            echo -e "${GREEN}✓ 端口 $server_port 可访问${NC}\n"
+        else
+            echo -e "${RED}✗ 端口 $server_port 无法访问${NC}"
+            echo -e "${YELLOW}  可能原因: SmartDNS 未运行或防火墙阻止${NC}\n"
+            all_checks_passed=false
+        fi
+    # 尝试使用 bash 内置功能
+    elif (timeout 5 bash -c "echo >/dev/tcp/$server_ip/$server_port" 2>/dev/null); then
+        echo -e "${GREEN}✓ 端口 $server_port 可访问${NC}\n"
+    else
+        echo -e "${RED}✗ 端口 $server_port 无法访问${NC}"
+        echo -e "${YELLOW}  可能原因: SmartDNS 未运行或防火墙阻止${NC}\n"
+        all_checks_passed=false
+    fi
+
+    # 检查 3: DNS 查询测试
+    echo -e "${CYAN}[3/3] DNS 查询测试...${NC}"
+
+    local test_domain="google.com"
+    local dns_test_passed=false
+
+    # 尝试使用 dig
+    if command -v dig >/dev/null 2>&1; then
+        if dig +time=3 +tries=1 @"$server_ip" -p "$server_port" "$test_domain" A +short | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo -e "${GREEN}✓ DNS 查询正常 (测试域名: $test_domain)${NC}\n"
+            dns_test_passed=true
+        fi
+    # 尝试使用 nslookup
+    elif command -v nslookup >/dev/null 2>&1; then
+        if timeout 5 nslookup "$test_domain" "$server_ip" 2>/dev/null | grep -q "Address:"; then
+            echo -e "${GREEN}✓ DNS 查询正常 (测试域名: $test_domain)${NC}\n"
+            dns_test_passed=true
+        fi
+    fi
+
+    if [ "$dns_test_passed" = false ]; then
+        echo -e "${RED}✗ DNS 查询失败${NC}"
+        echo -e "${YELLOW}  可能原因: SmartDNS 未正确配置或响应超时${NC}\n"
+        all_checks_passed=false
+    fi
+
+    # 总结
+    if [ "$all_checks_passed" = true ]; then
+        echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "${GREEN}✓ 所有检查通过，可以继续配置${NC}"
+        echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
+        return 0
+    else
+        echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "${RED}✗ 部分检查未通过${NC}"
+        echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
+
+        echo -e "${YELLOW}建议检查以下内容:${NC}"
+        echo -e "  ${CYAN}•${NC} 解锁机的 SmartDNS 是否正在运行"
+        echo -e "  ${CYAN}•${NC} 解锁机防火墙是否允许端口 $server_port"
+        echo -e "  ${CYAN}•${NC} 网络连接是否正常"
+        echo -e "  ${CYAN}•${NC} IP 地址是否输入正确\n"
+
+        read -p "$(echo -e "${YELLOW}是否仍要继续配置? (y/n) [默认: n]: ${NC}")" force_continue
+        force_continue=${force_continue:-n}
+
+        if [[ $force_continue =~ ^[Yy]$ ]]; then
+            echo -e "${YELLOW}继续配置...${NC}\n"
+            return 0
+        else
+            echo -e "${RED}已取消配置${NC}\n"
+            return 1
+        fi
     fi
 }
 
