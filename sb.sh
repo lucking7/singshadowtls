@@ -812,54 +812,37 @@ check_tls13_support() {
 }
 
 # Function to validate SNI domains and populate VALID_TLS13_DOMAINS
-validate_sni_domains() {
-    echo -e "${CYAN}正在验证 TLS 1.3 域名支持...${NC}"
-    
-    # Define all potential SNI domains
-    local domains=(
-        "p11.douyinpic.com"
-        "mp.weixin.qq.com"
-        "coding.net"
-        "upyun.com"
-        "sns-video-hw.xhscdn.com"
-        "sns-video-qn.xhscdn.com"
-        "p6-dy.byteimg.com"
-        "feishu.cn"
-        "douyin.com"
-        "toutiao.com"
-        "v6-dy-y.ixigua.com"
-        "hls3-akm.douyucdn.cn"
-        "publicassets.cdn-apple.com"
-        "weather-data.apple.com"
-        "gateway.icloud.com"
-    )
-    
-    # Reset the valid domains string
-    VALID_TLS13_DOMAINS=""
-    local valid_count=0
-    local total_count=${#domains[@]}
-    
-    for domain in "${domains[@]}"; do
-        echo -ne "${CYAN}检查 $domain...${NC} "
-        if check_tls13_support "$domain"; then
-            echo -e "${GREEN}✓${NC}"
-            if [[ -n "$VALID_TLS13_DOMAINS" ]]; then
-                VALID_TLS13_DOMAINS="$VALID_TLS13_DOMAINS $domain"
-            else
-                VALID_TLS13_DOMAINS="$domain"
-            fi
-            valid_count=$((valid_count + 1))
-        else
-            echo -e "${RED}✗${NC}"
+# Pre-verified TLS 1.3 compatible SNI domains (tested and confirmed)
+# Removed: mp.weixin.qq.com, hls3-akm.douyucdn.cn (not supporting TLS 1.3)
+get_verified_sni_domains() {
+    # Return space-separated list of verified TLS 1.3 domains
+    echo "p11.douyinpic.com coding.net upyun.com sns-video-hw.xhscdn.com sns-video-qn.xhscdn.com p6-dy.byteimg.com feishu.cn douyin.com toutiao.com v6-dy-y.ixigua.com publicassets.cdn-apple.com weather-data.apple.com gateway.icloud.com"
+}
+
+# Function to verify a single domain's TLS 1.3 support
+verify_single_domain() {
+    local domain="$1"
+    local show_output="${2:-true}"
+
+    if [[ -z "$domain" ]]; then
+        return 1
+    fi
+
+    if [[ "$show_output" == "true" ]]; then
+        echo -e "${CYAN}正在验证域名 ${MAGENTA}$domain${CYAN} 的 TLS 1.3 支持...${NC}"
+    fi
+
+    if check_tls13_support "$domain"; then
+        if [[ "$show_output" == "true" ]]; then
+            echo -e "${GREEN}✓ 域名 $domain 支持 TLS 1.3${NC}"
         fi
-    done
-    
-    echo -e "${GREEN}TLS 1.3 验证完成: $valid_count/$total_count 个域名可用${NC}"
-    
-    # Fallback if no domains are valid (network issues, etc.)
-    if [[ -z "$VALID_TLS13_DOMAINS" ]]; then
-        echo -e "${YELLOW}警告: 无法验证任何域名的 TLS 1.3 支持，使用默认域名${NC}"
-        VALID_TLS13_DOMAINS="p11.douyinpic.com gateway.icloud.com"
+        return 0
+    else
+        if [[ "$show_output" == "true" ]]; then
+            echo -e "${YELLOW}⚠ 警告: 域名 $domain 可能不支持 TLS 1.3${NC}"
+            echo -e "${YELLOW}  ShadowTLS 需要 TLS 1.3 支持才能正常工作${NC}"
+        fi
+        return 1
     fi
 }
 
@@ -1248,16 +1231,12 @@ install_sing_box() {
     local proxysite=""
     local wildcard_sni=""
     if [[ $use_shadowtls -gt 0 ]]; then
-        echo -e "\n${CYAN}Performing TLS 1.3 validation for SNI domains...${NC}"
-        validate_sni_domains
-        
-        # Build dynamic SNI menu based on validated domains
-        echo -e "\n${YELLOW}Select ShadowTLS SNI (TLS 1.3 verified domains only):${NC}"
-        
-        # Define all domains with their info (TLS 1.3 verified)
+        # Use pre-verified TLS 1.3 domains (no batch validation)
+        echo -e "\n${YELLOW}Select ShadowTLS SNI (TLS 1.3 verified domains):${NC}"
+
+        # Define all domains with their info (TLS 1.3 verified, removed unsupported ones)
         declare -A all_sni_domains=(
             ["p11.douyinpic.com"]="Douyin Image CDN - Default"
-            ["mp.weixin.qq.com"]="WeChat"
             ["coding.net"]="Coding.net"
             ["upyun.com"]="UpYun CDN"
             ["sns-video-hw.xhscdn.com"]="XiaoHongShu Video"
@@ -1267,14 +1246,14 @@ install_sing_box() {
             ["douyin.com"]="Douyin"
             ["toutiao.com"]="Toutiao"
             ["v6-dy-y.ixigua.com"]="Ixigua Video"
-            ["hls3-akm.douyucdn.cn"]="Douyu CDN"
             ["publicassets.cdn-apple.com"]="Apple CDN"
             ["weather-data.apple.com"]="Apple Weather"
             ["gateway.icloud.com"]="iCloud Gateway - Most Stable"
         )
-        
-        # Convert VALID_TLS13_DOMAINS to array
-        read -ra valid_domains_array <<< "$VALID_TLS13_DOMAINS"
+
+        # Get verified domains list
+        local verified_domains=$(get_verified_sni_domains)
+        read -ra valid_domains_array <<< "$verified_domains"
         
         # Build menu
         declare -a menu_domains=()
@@ -1310,23 +1289,19 @@ install_sing_box() {
             read -p "$(echo -e "${YELLOW}Enter custom domain: ${NC}")" proxysite
             if [[ -z "$proxysite" ]]; then
                 proxysite="$default_domain"
-            fi
-            # Optionally verify custom domain
-            echo -e "${CYAN}Verifying custom domain TLS 1.3 support...${NC}"
-            if check_tls13_support "$proxysite"; then
-                echo -e "${GREEN}✓ Custom domain $proxysite supports TLS 1.3${NC}"
             else
-                echo -e "${YELLOW}⚠ Warning: Custom domain $proxysite may not support TLS 1.3${NC}"
+                # Verify custom domain
+                verify_single_domain "$proxysite" "true"
             fi
         elif [[ -n "$sni_choice" ]] && [[ -n "${choice_to_domain[$sni_choice]:-}" ]]; then
-            # Valid choice from menu
+            # Valid choice from menu (pre-verified, no need to check again)
             proxysite="${choice_to_domain[$sni_choice]}"
         else
             # Invalid choice, use default
             echo -e "${YELLOW}Invalid choice. Using default domain.${NC}"
             proxysite="$default_domain"
         fi
-        
+
         echo -e "${GREEN}Using SNI: ${MAGENTA}$proxysite${NC}"
 
         echo -e "\n${YELLOW}Select ShadowTLS wildcard SNI mode:${NC}"
@@ -2187,21 +2162,16 @@ change_shadowtls_sni() {
     fi
     
     echo -e "\n${BLUE}Change ShadowTLS SNI${NC}"
-    
+
     local current_sni=$(jq -r '.inbounds[] | select(.type == "shadowtls") | .handshake.server' /etc/sing-box/config.json)
     echo -e "${CYAN}Current SNI: $current_sni${NC}"
-    
-    # Perform TLS 1.3 validation
-    echo -e "\n${CYAN}Performing TLS 1.3 validation for SNI domains...${NC}"
-    validate_sni_domains
-    
-    # Build dynamic SNI menu based on validated domains
-    echo -e "\n${CYAN}Select new SNI (TLS 1.3 verified domains only):${NC}"
-    
-    # Define all domains with their info (TLS 1.3 verified)
+
+    # Use pre-verified TLS 1.3 domains (no batch validation)
+    echo -e "\n${CYAN}Select new SNI (TLS 1.3 verified domains):${NC}"
+
+    # Define all domains with their info (TLS 1.3 verified, removed unsupported ones)
     declare -A all_sni_domains=(
         ["p11.douyinpic.com"]="Douyin Image CDN"
-        ["mp.weixin.qq.com"]="WeChat"
         ["coding.net"]="Coding.net"
         ["upyun.com"]="UpYun CDN"
         ["sns-video-hw.xhscdn.com"]="XiaoHongShu Video"
@@ -2211,14 +2181,14 @@ change_shadowtls_sni() {
         ["douyin.com"]="Douyin"
         ["toutiao.com"]="Toutiao"
         ["v6-dy-y.ixigua.com"]="Ixigua Video"
-        ["hls3-akm.douyucdn.cn"]="Douyu CDN"
         ["publicassets.cdn-apple.com"]="Apple CDN"
         ["weather-data.apple.com"]="Apple Weather"
         ["gateway.icloud.com"]="iCloud Gateway - Most Stable"
     )
-    
-    # Convert VALID_TLS13_DOMAINS to array
-    read -ra valid_domains_array <<< "$VALID_TLS13_DOMAINS"
+
+    # Get verified domains list
+    local verified_domains=$(get_verified_sni_domains)
+    read -ra valid_domains_array <<< "$verified_domains"
     
     # Build menu
     local menu_index=1
@@ -2248,15 +2218,12 @@ change_shadowtls_sni() {
         read -p "$(echo -e "${YELLOW}Enter custom domain: ${NC}")" new_sni
         if [[ -z "$new_sni" ]]; then
             new_sni="$default_domain"
-        fi
-        # Verify custom domain
-        echo -e "${CYAN}Verifying custom domain TLS 1.3 support...${NC}"
-        if check_tls13_support "$new_sni"; then
-            echo -e "${GREEN}✓ Custom domain $new_sni supports TLS 1.3${NC}"
         else
-            echo -e "${YELLOW}⚠ Warning: Custom domain $new_sni may not support TLS 1.3${NC}"
+            # Verify custom domain
+            verify_single_domain "$new_sni" "true"
         fi
     elif [[ -n "${choice_to_domain[$sni_choice]}" ]]; then
+        # Valid choice from menu (pre-verified, no need to check again)
         new_sni="${choice_to_domain[$sni_choice]}"
     else
         # Invalid choice or empty, use default
