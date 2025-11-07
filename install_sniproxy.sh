@@ -535,23 +535,47 @@ download_and_process_rules() {
     local service_name=$1
     local url=$2
     local output_file="$TEMP_DIR/${service_name// /_}.json"
-    
+    local retry_count=3
+    local retry_delay=3
+
     log_info "下载 $service_name 规则..."
-    
-    if curl -fsSL "$url" -o "$output_file"; then
-        # 验证 JSON 格式
-        if ! jq empty "$output_file" 2>/dev/null; then
-            log_warn "$service_name 规则文件格式无效,跳过"
-            return 1
+
+    # 尝试下载（带重试）
+    local download_success=false
+    for ((i=1; i<=retry_count; i++)); do
+        if curl -fsSL --connect-timeout 10 --max-time 60 "$url" -o "$output_file"; then
+            download_success=true
+            break
+        else
+            if [[ $i -lt $retry_count ]]; then
+                log_warn "  下载失败 (尝试 $i/$retry_count)，${retry_delay}秒后重试..."
+                sleep $retry_delay
+            fi
         fi
-        
-        local domain_count=$(extract_domains_from_json "$output_file" | wc -l)
-        log "  ✓ $service_name: 提取到 $domain_count 个域名"
-        return 0
-    else
-        log_warn "下载 $service_name 规则失败,跳过"
+    done
+
+    if [[ "$download_success" != "true" ]]; then
+        log_warn "  ✗ $service_name: 下载失败 (已重试 $retry_count 次)，跳过此服务"
         return 1
     fi
+
+    # 验证 JSON 格式
+    if ! jq empty "$output_file" 2>/dev/null; then
+        log_warn "  ✗ $service_name: 规则文件格式无效，跳过此服务"
+        rm -f "$output_file"
+        return 1
+    fi
+
+    # 验证是否提取到域名
+    local domain_count=$(extract_domains_from_json "$output_file" 2>/dev/null | wc -l | tr -d ' ')
+    if [[ -z "$domain_count" ]] || [[ "$domain_count" -eq 0 ]]; then
+        log_warn "  ✗ $service_name: 未提取到任何域名，跳过此服务"
+        rm -f "$output_file"
+        return 1
+    fi
+
+    log "  ✓ $service_name: 成功提取 $domain_count 个域名"
+    return 0
 }
 
 # 用户选择服务（支持交互式和非交互式模式）
