@@ -11,9 +11,10 @@ set -Eeuo pipefail
 
 # 版本与元信息
 readonly SCRIPT_VERSION="1.0.6"
-readonly MAINTAINER="lucking7@github.com"
-readonly REQUIRES_BASH="4.0+"
+readonly MAINTAINER="lucking7@github.com"  # 用于 show_help()
+readonly REQUIRES_BASH="4.0+"              # 用于 show_help()
 readonly SCRIPT_BASENAME="$(basename "$0")"
+# shellcheck disable=SC2034  # 保留以备将来使用（如加载相对路径配置文件）
 readonly SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
 # 颜色定义（ANSI 转义码）
@@ -95,6 +96,8 @@ trap 'on_error $? $LINENO' ERR
 show_help() {
   cat << EOF
 SNI Proxy 自动化安装和配置脚本 v${SCRIPT_VERSION}
+维护者: ${MAINTAINER}
+要求: Bash ${REQUIRES_BASH}
 
 用法: $SCRIPT_BASENAME [选项]
 
@@ -218,12 +221,24 @@ parse_arguments() {
 
 # 检测是否为交互式环境
 is_interactive() {
-  # 检查是否显式设置为非交互式
+  # 1. 检查是否显式设置为非交互式
   [[ -n "$NON_INTERACTIVE" ]] && return 1
 
-  # 检查 stdin 是否是终端，或者 /dev/tty 是否可用
-  # 这样即使通过 curl | bash 执行，只要终端可用就能交互
-  [[ -t 0 ]] || [[ -c /dev/tty ]]
+  # 2. 排除常见的 CI 环境
+  if [[ -n "${CI:-}" ]] || [[ -n "${GITHUB_ACTIONS:-}" ]] || \
+     [[ -n "${GITLAB_CI:-}" ]] || [[ -n "${JENKINS_HOME:-}" ]] || \
+     [[ -n "${CIRCLECI:-}" ]] || [[ -n "${TRAVIS:-}" ]]; then
+    return 1
+  fi
+
+  # 3. 检查终端可用性
+  # - stdin 是终端 (-t 0)，或
+  # - /dev/tty 可读写 (-r /dev/tty && -w /dev/tty)
+  if [[ -t 0 ]] || [[ -r /dev/tty && -w /dev/tty ]]; then
+    return 0
+  fi
+
+  return 1
 }
 
 # 日志函数（遵循 R4.7.1）
@@ -1108,7 +1123,28 @@ get_server_ip() {
 install_smartdns() {
   log_info "开始安装 SmartDNS..."
 
-  # 检测架构
+  # 1. 检查是否已安装
+  if command -v smartdns >/dev/null 2>&1; then
+    local installed_version=$(smartdns -v 2>/dev/null | head -1 || echo "未知版本")
+    log_info "检测到已安装 SmartDNS: $installed_version"
+
+    if is_interactive && [[ -z "$AUTO_CONFIRM" ]]; then
+      read -p "是否重新安装 SmartDNS? (y/n) [默认: n]: " reinstall_choice < /dev/tty
+      reinstall_choice=${reinstall_choice:-n}
+
+      if [[ ! $reinstall_choice =~ ^[Yy]$ ]]; then
+        log_info "跳过 SmartDNS 安装，使用现有版本"
+        return 0
+      fi
+      log_info "将重新安装 SmartDNS"
+    else
+      # 非交互模式：跳过重装
+      log_info "非交互模式：跳过 SmartDNS 安装，使用现有版本"
+      return 0
+    fi
+  fi
+
+  # 2. 检测架构
   local arch
   arch=$(detect_smartdns_arch) || {
     log_error "无法检测系统架构"
@@ -1117,37 +1153,66 @@ install_smartdns() {
 
   log_info "检测到架构: $arch"
 
-  # 获取最新版本
-  log_info "获取 SmartDNS 最新版本..."
-  SMARTDNS_VERSION=$(curl -s https://api.github.com/repos/pymumu/smartdns/releases/latest | jq -r '.tag_name' | sed 's/Release//')
+  # 3. 获取最新版本（带重试）
+  local retry_count=3
+  local retry_delay=5
+
+  for ((i=1; i<=retry_count; i++)); do
+    log_info "获取 SmartDNS 最新版本 (尝试 $i/$retry_count)..."
+    SMARTDNS_VERSION=$(curl -s --connect-timeout 10 --max-time 30 \
+      https://api.github.com/repos/pymumu/smartdns/releases/latest | \
+      jq -r '.tag_name' | sed 's/Release//')
+
+    if [[ -n "$SMARTDNS_VERSION" ]] && [[ "$SMARTDNS_VERSION" != "null" ]]; then
+      break
+    fi
+
+    if [[ $i -lt $retry_count ]]; then
+      log_warn "获取版本失败，${retry_delay}秒后重试..."
+      sleep $retry_delay
+    fi
+  done
 
   if [[ -z "$SMARTDNS_VERSION" ]] || [[ "$SMARTDNS_VERSION" == "null" ]]; then
     log_error "无法获取 SmartDNS 版本信息"
+    log_error "请检查网络连接或稍后重试"
     return 1
   fi
 
   log_info "最新版本: Release$SMARTDNS_VERSION"
 
-  # 构建下载 URL
+  # 4. 下载（带重试）
   local download_url="https://github.com/pymumu/smartdns/releases/download/Release${SMARTDNS_VERSION}/smartdns.${SMARTDNS_VERSION}.${arch}.tar.gz"
   local tar_file="$TEMP_DIR/smartdns.tar.gz"
 
-  log_info "下载 SmartDNS..."
-  if ! curl -fsSL "$download_url" -o "$tar_file"; then
-    log_error "下载 SmartDNS 失败"
-    log_error "URL: $download_url"
-    return 1
-  fi
+  for ((i=1; i<=retry_count; i++)); do
+    log_info "下载 SmartDNS (尝试 $i/$retry_count)..."
+    if curl -fsSL --connect-timeout 10 --max-time 300 "$download_url" -o "$tar_file"; then
+      log_info "下载完成"
+      break
+    fi
 
-  # 解压
+    if [[ $i -lt $retry_count ]]; then
+      log_warn "下载失败，${retry_delay}秒后重试..."
+      sleep $retry_delay
+    else
+      log_error "下载 SmartDNS 失败"
+      log_error "URL: $download_url"
+      log_error "请检查网络连接或稍后重试"
+      return 1
+    fi
+  done
+
+  # 5. 解压
   log_info "解压 SmartDNS..."
   cd "$TEMP_DIR"
   if ! tar -xzf "$tar_file"; then
     log_error "解压 SmartDNS 失败"
+    log_error "可能是下载文件损坏，请重试"
     return 1
   fi
 
-  # 查找解压后的目录
+  # 6. 查找解压后的目录
   local smartdns_dir
   smartdns_dir=$(find "$TEMP_DIR" -maxdepth 1 -type d -name "smartdns*" | head -1)
 
@@ -1158,12 +1223,14 @@ install_smartdns() {
 
   cd "$smartdns_dir"
 
-  # 执行安装脚本
+  # 7. 执行安装脚本（确保非交互式）
   log_info "执行 SmartDNS 安装脚本..."
   if [[ -f "./install" ]]; then
     chmod +x ./install
-    if ! ./install -i; then
+    # 使用 -i 参数（安装）并重定向输入确保非交互
+    if ! ./install -i < /dev/null; then
       log_error "SmartDNS 安装脚本执行失败"
+      log_error "请检查日志: journalctl -xe"
       return 1
     fi
   else
@@ -1457,8 +1524,15 @@ test_smartdns() {
     log "✓ 服务运行正常"
   else
     log_error "✗ 服务未运行"
+    log_error "诊断信息："
+    echo "  systemctl status smartdns:"
+    systemctl status smartdns --no-pager || true
     return 1
   fi
+
+  # 等待服务完全启动
+  log_info "等待服务完全启动 (3秒)..."
+  sleep 3
 
   log_info "测试端口监听..."
   if ss -ulnp | grep -q ":53 "; then
@@ -1468,24 +1542,81 @@ test_smartdns() {
     ss -ulnp | grep smartdns || true
   fi
 
-  log_info "测试 DNS 查询功能..."
-  # 测试普通域名解析（应该通过上游 DNS）
-  if nslookup google.com 127.0.0.1 &>/dev/null; then
-    log "✓ DNS 查询功能正常"
-  else
-    log_error "✗ DNS 查询失败"
-    log_error "SmartDNS 可能配置错误，建议检查配置文件"
+  log_info "测试 DNS 查询功能（最多重试 3 次）..."
+  local dns_query_success=false
+  for ((i=1; i<=3; i++)); do
+    if nslookup google.com 127.0.0.1 &>/dev/null; then
+      log "✓ DNS 查询功能正常 (第 $i 次尝试)"
+      dns_query_success=true
+      break
+    else
+      if [[ $i -lt 3 ]]; then
+        log_warn "✗ DNS 查询失败 (第 $i 次尝试)，2秒后重试..."
+        sleep 2
+      fi
+    fi
+  done
+
+  if [[ "$dns_query_success" != "true" ]]; then
+    log_error "✗ DNS 查询失败 (已重试 3 次)"
+    log_error ""
+    log_error "诊断信息："
+    echo "  1. 检查 SmartDNS 配置文件关键部分："
+    echo "  ---"
+    grep -E "^(bind|server|conf-file)" "$SMARTDNS_CONF" | head -10 || echo "  无法读取配置文件"
+    echo "  ---"
+    echo ""
+    echo "  2. 可能的原因："
+    echo "     - 上游 DNS 服务器不可达"
+    echo "     - SmartDNS 配置文件语法错误"
+    echo "     - 防火墙阻止 DNS 查询"
+    echo ""
+    echo "  3. 手动测试命令："
+    echo "     nslookup google.com 127.0.0.1"
+    echo "     dig @127.0.0.1 google.com"
+    echo "     cat $SMARTDNS_CONF"
     return 1
   fi
 
   # 测试流媒体域名解析（应该返回本机 IP）
   if [[ -n "$SERVER_IP" ]]; then
-    log_info "测试流媒体域名解析..."
-    local test_result=$(nslookup netflix.com 127.0.0.1 2>/dev/null | grep -A1 "Name:" | grep "Address:" | awk '{print $2}')
-    if [[ "$test_result" == "$SERVER_IP" ]]; then
-      log "✓ 流媒体域名解析正确 (netflix.com -> $SERVER_IP)"
-    else
-      log_warn "⚠ 流媒体域名解析可能未生效 (期望: $SERVER_IP, 实际: $test_result)"
+    log_info "测试流媒体域名解析（最多重试 5 次，每次间隔 2 秒）..."
+    local streaming_test_success=false
+    for ((i=1; i<=5; i++)); do
+      local test_result=$(nslookup netflix.com 127.0.0.1 2>/dev/null | grep -A1 "Name:" | grep "Address:" | awk '{print $2}')
+      if [[ "$test_result" == "$SERVER_IP" ]]; then
+        log "✓ 流媒体域名解析正确 (netflix.com -> $SERVER_IP) (第 $i 次尝试)"
+        streaming_test_success=true
+        break
+      else
+        if [[ $i -lt 5 ]]; then
+          log_warn "⚠ 流媒体域名解析未生效 (第 $i 次尝试: 期望 $SERVER_IP, 实际 $test_result)，2秒后重试..."
+          sleep 2
+        fi
+      fi
+    done
+
+    if [[ "$streaming_test_success" != "true" ]]; then
+      log_warn "⚠ 流媒体域名解析可能未生效 (已重试 5 次)"
+      log_warn ""
+      log_warn "诊断信息："
+      echo "  1. 检查 address 规则配置："
+      echo "  ---"
+      grep "^address /" "$SMARTDNS_CONF" | head -5 || echo "  未找到 address 规则"
+      echo "  ---"
+      echo ""
+      echo "  2. 可能的原因："
+      echo "     - address 规则尚未生效（需要更长时间）"
+      echo "     - address 规则未包含 netflix.com"
+      echo "     - 配置文件重载失败"
+      echo ""
+      echo "  3. 手动测试命令："
+      echo "     nslookup netflix.com 127.0.0.1"
+      echo "     nslookup openai.com 127.0.0.1"
+      echo "     grep 'address /' $SMARTDNS_CONF"
+      echo ""
+      echo "  4. 请稍后手动验证，或重启 SmartDNS 服务："
+      echo "     systemctl restart smartdns"
     fi
   fi
 
