@@ -297,19 +297,89 @@ validate_domain() {
 confirm_action() {
     local message="${1:-确认执行此操作？}"
     local default="${2:-n}"
-    
+
     if [[ "$default" == "y" ]]; then
         read -p "$(echo -e "${YELLOW}${message} [Y/n]: ${NC}")" -n 1 -r response
     else
         read -p "$(echo -e "${YELLOW}${message} [y/N]: ${NC}")" -n 1 -r response
     fi
     echo
-    
+
     if [[ -z "$response" ]]; then
         response="$default"
     fi
-    
+
     [[ "$response" =~ ^[Yy]$ ]]
+}
+
+# 配置类型检测函数
+detect_config_type() {
+    local config_file="/etc/sing-box/config.json"
+
+    # 配置文件不存在
+    if [[ ! -f "$config_file" ]]; then
+        echo "none"
+        return 0
+    fi
+
+    # 检查配置文件有效性
+    if ! jq empty "$config_file" 2>/dev/null; then
+        echo "invalid"
+        return 0
+    fi
+
+    # 检查是否包含 inbounds（代理配置）
+    local has_inbounds=$(jq -e '.inbounds // empty | length > 0' "$config_file" 2>/dev/null)
+    # 检查是否包含 DNS 配置
+    local has_dns=$(jq -e '.dns // empty' "$config_file" 2>/dev/null)
+
+    if [[ "$has_inbounds" == "true" && "$has_dns" == "true" ]]; then
+        echo "proxy_dns"  # 已有代理 + DNS
+    elif [[ "$has_inbounds" == "true" ]]; then
+        echo "proxy"      # 仅代理
+    elif [[ "$has_dns" == "true" ]]; then
+        echo "dns"        # 仅 DNS
+    else
+        echo "unknown"
+    fi
+}
+
+# 从现有配置提取代理部分
+extract_proxy_config() {
+    local config_file="$1"
+    local output_file="$2"
+
+    # 提取 inbounds, outbounds, route 等代理相关配置
+    jq '{
+        inbounds: .inbounds,
+        outbounds: .outbounds,
+        route: .route
+    }' "$config_file" > "$output_file"
+}
+
+# 合并 DNS 配置到现有代理配置
+merge_dns_to_config() {
+    local config_file="$1"
+    local dns_servers="$2"  # JSON 格式的 DNS servers
+    local dns_rules="$3"    # JSON 格式的 DNS rules
+
+    local temp_file="${config_file}.merging"
+
+    # 使用 jq 合并配置
+    jq --argjson servers "$dns_servers" \
+       --argjson rules "$dns_rules" \
+       '.dns = {
+           servers: $servers,
+           rules: $rules
+       }' "$config_file" > "$temp_file"
+
+    if [[ $? -eq 0 ]]; then
+        mv "$temp_file" "$config_file"
+        return 0
+    else
+        rm -f "$temp_file"
+        return 1
+    fi
 }
 
 # 初始化日志系统
@@ -3775,6 +3845,82 @@ deploy_dns_unlock_client() {
         return 1
     fi
 
+    # 检测现有配置类型
+    echo -e "${CYAN}检测现有配置...${NC}"
+    local config_type=$(detect_config_type)
+    local merge_mode=false
+
+    case "$config_type" in
+        "proxy")
+            echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+            echo -e "${YELLOW}检测到您已配置代理服务 (ShadowTLS/Shadowsocks)${NC}"
+            echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
+
+            echo -e "${CYAN}请选择操作模式:${NC}\n"
+            echo -e "  ${CYAN}1)${NC} ${GREEN}代理 + DNS 解锁 (推荐)${NC}"
+            echo -e "     ${YELLOW}→${NC} 保留代理配置，添加 DNS 解锁功能"
+            echo -e "     ${YELLOW}→${NC} 代理客户端可享受 DNS 解锁服务"
+            echo -e "     ${YELLOW}→${NC} 本机系统也可使用 DNS 解锁\n"
+
+            echo -e "  ${CYAN}2)${NC} 仅 DNS 解锁 ${RED}(将清除代理配置)${NC}"
+            echo -e "     ${YELLOW}→${NC} 仅保留 DNS 解锁功能"
+            echo -e "     ${YELLOW}→${NC} ${RED}警告: 代理服务将停止工作${NC}\n"
+
+            echo -e "  ${CYAN}0)${NC} 取消操作\n"
+
+            read -p "$(echo -e "${YELLOW}请选择 [0-2]: ${NC}")" mode_choice
+
+            case "$mode_choice" in
+                1)
+                    echo -e "\n${GREEN}✓ 选择合并模式：代理 + DNS 解锁${NC}"
+                    merge_mode=true
+                    ;;
+                2)
+                    echo -e "\n${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+                    echo -e "${RED}警告: 此操作将清除代理配置！${NC}"
+                    echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
+
+                    if ! confirm_action "确认清除代理配置，仅保留 DNS 解锁？" "n"; then
+                        echo -e "${YELLOW}已取消操作${NC}"
+                        return 0
+                    fi
+                    merge_mode=false
+                    ;;
+                0)
+                    echo -e "${YELLOW}已取消操作${NC}"
+                    return 0
+                    ;;
+                *)
+                    echo -e "${RED}无效选择${NC}"
+                    return 1
+                    ;;
+            esac
+            ;;
+
+        "dns")
+            echo -e "${YELLOW}检测到您已配置 DNS 解锁服务${NC}"
+            echo -e "${CYAN}将更新 DNS 配置${NC}\n"
+            merge_mode=false
+            ;;
+
+        "proxy_dns")
+            echo -e "${YELLOW}检测到您已配置代理 + DNS 解锁${NC}"
+            echo -e "${CYAN}将更新 DNS 配置，保留代理设置${NC}\n"
+            merge_mode=true
+            ;;
+
+        "none")
+            echo -e "${GREEN}首次配置 DNS 解锁${NC}\n"
+            merge_mode=false
+            ;;
+
+        "invalid")
+            echo -e "${RED}错误: 现有配置文件格式无效${NC}"
+            echo -e "${YELLOW}建议备份后重新配置${NC}"
+            return 1
+            ;;
+    esac
+
     # 检查并停止 systemd-resolved
     echo -e "${CYAN}检查端口 53 占用情况...${NC}"
     if systemctl is-active --quiet systemd-resolved; then
@@ -3938,17 +4084,28 @@ deploy_dns_unlock_client() {
     echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}\n"
 
     # 备份现有配置
-    echo -e "${CYAN}[1/4] 备份现有配置...${NC}"
+    echo -e "${CYAN}[1/5] 备份现有配置...${NC}"
+    local backup_file=""
+    local proxy_backup_file=""
     if [[ -f /etc/sing-box/config.json ]]; then
         backup_file="/etc/sing-box/config.json.bak.$(date +%Y%m%d_%H%M%S)"
         cp /etc/sing-box/config.json "$backup_file"
-        echo -e "${GREEN}✓ 已备份到: $backup_file${NC}\n"
+        echo -e "${GREEN}✓ 已备份到: $backup_file${NC}"
+
+        # 如果是合并模式，额外保存代理配置部分
+        if [[ "$merge_mode" == true ]]; then
+            proxy_backup_file="/tmp/sing-box-proxy-config.$$.json"
+            extract_proxy_config "/etc/sing-box/config.json" "$proxy_backup_file"
+            echo -e "${GREEN}✓ 已提取代理配置到临时文件${NC}\n"
+        else
+            echo ""
+        fi
     else
         echo -e "${YELLOW}无需备份（配置文件不存在）${NC}\n"
     fi
 
     # 构建 DNS servers 数组
-    echo -e "${CYAN}[2/4] 生成 DNS 配置...${NC}"
+    echo -e "${CYAN}[2/5] 生成 DNS 配置...${NC}"
     cat > /etc/sing-box/config.json << 'EOFCONFIG'
 {
   "log": {
@@ -3983,7 +4140,7 @@ EOFCONFIG
     # 替换变量
     echo -e "${GREEN}✓ DNS 配置生成完成${NC}\n"
 
-    echo -e "${CYAN}[3/4] 应用配置参数...${NC}"
+    echo -e "${CYAN}[3/5] 应用配置参数...${NC}"
     sed -i "s/UNLOCK_IP/$unlock_ip/g" /etc/sing-box/config.json
     sed -i "s/UNLOCK_PORT/$unlock_port/g" /etc/sing-box/config.json
     sed -i "s/PUBLIC_DNS_TAG/$public_dns_tag/g" /etc/sing-box/config.json
@@ -4084,7 +4241,38 @@ EOFCONFIG
 }
 EOFCONFIG
 
-    echo -e "${CYAN}[4/4] 验证配置文件...${NC}"
+    # 如果是合并模式，将代理配置合并回去
+    if [[ "$merge_mode" == true && -f "$proxy_backup_file" ]]; then
+        echo -e "${CYAN}[4/5] 合并代理配置...${NC}"
+
+        # 读取代理配置
+        local inbounds=$(jq '.inbounds' "$proxy_backup_file")
+        local outbounds=$(jq '.outbounds' "$proxy_backup_file")
+        local route=$(jq '.route' "$proxy_backup_file")
+
+        # 合并配置：添加 inbounds 和 outbounds，合并 route
+        jq --argjson inbounds "$inbounds" \
+           --argjson outbounds "$outbounds" \
+           --argjson route "$route" \
+           '. + {
+               inbounds: $inbounds,
+               outbounds: ($outbounds + .outbounds | unique_by(.tag)),
+               route: ($route + .route | {
+                   rule_set: (($route.rule_set // []) + (.route.rule_set // []) | unique_by(.tag)),
+                   auto_detect_interface: (.route.auto_detect_interface // $route.auto_detect_interface // true),
+                   final: (.route.final // $route.final // "direct")
+               })
+           }' /etc/sing-box/config.json > /etc/sing-box/config.json.tmp
+
+        mv /etc/sing-box/config.json.tmp /etc/sing-box/config.json
+        rm -f "$proxy_backup_file"
+
+        echo -e "${GREEN}✓ 代理配置合并完成${NC}"
+        echo -e "${YELLOW}  → 保留了代理 inbounds 和 outbounds${NC}"
+        echo -e "${YELLOW}  → 代理客户端可享受 DNS 解锁服务${NC}\n"
+    fi
+
+    echo -e "${CYAN}[5/5] 验证配置文件...${NC}"
     if ! sing-box check -c /etc/sing-box/config.json; then
         echo -e "${RED}✗ 配置文件验证失败${NC}"
         echo -e "${YELLOW}正在恢复备份配置...${NC}"
