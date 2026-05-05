@@ -32,7 +32,7 @@ CYAN='\033[0;36m'   # Secondary/Information/Options
 NC='\033[0m'      # No Color
 
 # 版本信息
-SCRIPT_VERSION="3.3"
+SCRIPT_VERSION="3.4"
 SCRIPT_NAME="Sing-Box & ShadowTLS Multi-Deployment Script"
 
 # 日志配置
@@ -1013,16 +1013,16 @@ install_sing_box() {
     ARCH=$(get_arch)
     echo -e "${CYAN}Detected Architecture: ${MAGENTA}$ARCH${NC}"
 
-    echo -e "${CYAN}Fetching latest Sing-Box beta version from GitHub...${NC}"
-    VERSION=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases | jq -r '.[] | select(.prerelease == true) | .tag_name' | head -n1 | sed 's/v//')
-    if [[ -z "$VERSION" ]]; then
-        echo -e "${RED}Error: Could not fetch the latest beta version tag from GitHub.${NC}"
+    echo -e "${CYAN}Fetching latest Sing-Box stable version from GitHub...${NC}"
+    VERSION=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | jq -r '.tag_name' | sed 's/v//')
+    if [[ -z "$VERSION" || "$VERSION" == "null" ]]; then
+        echo -e "${RED}Error: Could not fetch the latest stable version tag from GitHub.${NC}"
         echo -e "${YELLOW}Please check your internet connection or GitHub API rate limits.${NC}"
         exit 1
     fi
-    echo -e "${GREEN}Latest Sing-Box beta version: ${MAGENTA}$VERSION${NC}"
+    echo -e "${GREEN}Latest Sing-Box stable version: ${MAGENTA}$VERSION${NC}"
 
-    echo -e "${CYAN}Downloading Sing-Box beta ${MAGENTA}$VERSION${CYAN} for ${MAGENTA}$ARCH${CYAN}...${NC}"
+    echo -e "${CYAN}Downloading Sing-Box ${MAGENTA}$VERSION${CYAN} for ${MAGENTA}$ARCH${CYAN}...${NC}"
     echo -e "${YELLOW}下载进度：${NC}"
     curl -# -Lo sing-box.deb "https://github.com/SagerNet/sing-box/releases/download/v${VERSION}/sing-box_${VERSION}_linux_${ARCH}.deb"
     if [[ $? -ne 0 ]]; then
