@@ -32,7 +32,7 @@ CYAN='\033[0;36m'   # Secondary/Information/Options
 NC='\033[0m'      # No Color
 
 # 版本信息
-SCRIPT_VERSION="3.4"
+SCRIPT_VERSION="3.5"
 SCRIPT_NAME="Sing-Box & ShadowTLS Multi-Deployment Script"
 
 # 日志配置
@@ -1509,11 +1509,6 @@ INNER_EOF
                 "type": "fakeip",
                 "inet4_range": "198.18.0.0/15",
                 "inet6_range": "fc00::/18"
-            },
-            {
-                "tag": "dns_block",
-                "type": "hosts",
-                "predefined": {}
             }
         ],
         "final": "dns_cf",
@@ -1543,21 +1538,6 @@ INNER_EOF
                 "rule_set": ["geosite-google"],
                 "server": "dns_google",
                 "strategy": "ipv4_only"
-            },
-            {
-                "rule_set": ["geosite-netflix"],
-                "server": "dns_cf",
-                "strategy": "ipv6_only"
-            },
-            {
-                "rule_set": ["geosite-disney"],
-                "server": "dns_cf",
-                "strategy": "ipv6_only"
-            },
-            {
-                "rule_set": ["geosite-category-media"],
-                "server": "dns_cf",
-                "strategy": "ipv6_only"
             },
             {
                 "rule_set": ["geosite-spotify"],
@@ -2308,18 +2288,10 @@ manage_dns_strategies() {
             echo -e "${GREEN}Global DNS strategy updated to: ${MAGENTA}$new_strategy${NC}"
             ;;
         2)
-            echo -e "\n${YELLOW}Select streaming services DNS strategy:${NC}"
-            echo -e "  ${CYAN}1) ipv4_only - Force IPv4 (may cause issues with some services)${NC}"
-            echo -e "  ${CYAN}2) ipv6_only - Force IPv6 (current default for streaming)${NC}"
-            echo -e "  ${CYAN}3) prefer_ipv4 - Prefer IPv4${NC}"
-            echo -e "  ${CYAN}4) prefer_ipv6 - Prefer IPv6${NC}"
-            read -p "$(echo -e "${YELLOW}Enter your choice [1-4]: ${NC}")" strategy_choice
-            case $strategy_choice in
-                1) new_strategy="ipv4_only" ;; 2) new_strategy="ipv6_only" ;; 3) new_strategy="prefer_ipv4" ;; 4) new_strategy="prefer_ipv6" ;;
-                *) echo -e "${RED}Invalid option.${NC}"; return 1 ;;
-            esac
-            jq ".dns.rules = [.dns.rules[] | if (.rule_set | type == \"array\" and (contains([\"geosite-netflix\"]) or contains([\"geosite-disney\"]) or contains([\"geosite-category-media\"]))) or (.rule_set | type == \"string\" and (. == \"geosite-netflix\" or . == \"geosite-disney\" or . == \"geosite-category-media\")) then .strategy = \"$new_strategy\" else . end]" /etc/sing-box/config.json > /tmp/sing-box-temp.json && mv /tmp/sing-box-temp.json /etc/sing-box/config.json
-            echo -e "${GREEN}Streaming services DNS strategy updated to: ${MAGENTA}$new_strategy${NC}"
+            echo -e "\n${YELLOW}流媒体服务使用 FakeIP 解析${NC}"
+            echo -e "${CYAN}Netflix/Disney/媒体类域名通过 FakeIP 服务器解析，DNS 策略不适用。${NC}"
+            echo -e "${CYAN}FakeIP 会为 A/AAAA 查询返回虚拟 IP，用于路由决策。${NC}"
+            echo -e "${CYAN}如需修改流媒体路由行为，请调整路由规则中的 outbound。${NC}"
             ;;
         3) # AI Services
             echo -e "\n${YELLOW}Select AI services DNS strategy:${NC}"
@@ -2367,8 +2339,8 @@ manage_dns_strategies() {
             echo -e "\n${BLUE}Current DNS Strategies${NC}"
             echo -e "  ${CYAN}Global strategy: ${MAGENTA}$(jq -r '.dns.strategy' /etc/sing-box/config.json)${NC}"
             echo -e "\n  ${YELLOW}Service-specific strategies:${NC}"
-            local streaming_strategy=$(jq -r '.dns.rules[] | select((.rule_set | type == "array" and contains(["geosite-netflix"])) or (.rule_set | type == "string" and . == "geosite-netflix")) | .strategy' /etc/sing-box/config.json | head -1)
-            echo -e "    ${CYAN}Streaming (Netflix/Disney): ${MAGENTA}${streaming_strategy:-default}${NC}"
+            local streaming_server=$(jq -r '.dns.rules[] | select((.rule_set | type == "array" and contains(["geosite-netflix"])) or (.rule_set | type == "string" and . == "geosite-netflix")) | .server' /etc/sing-box/config.json | head -1)
+            echo -e "    ${CYAN}Streaming (Netflix/Disney): ${MAGENTA}${streaming_server:-default}${NC}"
             local ai_strategy=$(jq -r '.dns.rules[] | select((.rule_set | type == "array" and contains(["geosite-ai-chat-!cn"])) or (.rule_set | type == "string" and . == "geosite-ai-chat-!cn")) | .strategy' /etc/sing-box/config.json | head -1)
             echo -e "    ${CYAN}AI services: ${MAGENTA}${ai_strategy:-default}${NC}"
             local google_strategy=$(jq -r '.dns.rules[] | select((.rule_set | type == "array" and contains(["geosite-google"])) or (.rule_set | type == "string" and . == "geosite-google")) | .strategy' /etc/sing-box/config.json | head -1)
@@ -3094,16 +3066,11 @@ EOF
 EOF
     fi
 
-    # 添加本地 DNS 和拦截 DNS
+    # 添加本地 DNS
     cat >> /etc/sing-box/config.json << EOF
       {
         "tag": "dns_local",
         "type": "local"
-      },
-      {
-        "tag": "dns_block",
-        "type": "hosts",
-        "predefined": {}
       }
     ],
     "final": "dns_cloudflare",
@@ -3149,7 +3116,22 @@ EOF
     fi
 
     # 添加流媒体 DNS 规则
-    cat >> /etc/sing-box/config.json << EOF
+    # 当 FakeIP 启用时，netflix/disney/category-media 已由 FakeIP 规则处理
+    if [[ $enable_fakeip =~ ^[Yy]$ ]]; then
+        cat >> /etc/sing-box/config.json << EOF
+      {
+        "rule_set": ["geosite-spotify"],
+        "server": "$default_server",
+        "strategy": "prefer_ipv4"
+      },
+      {
+        "rule_set": ["geosite-youtube"],
+        "server": "$default_server",
+        "strategy": "prefer_ipv6"
+      },
+EOF
+    else
+        cat >> /etc/sing-box/config.json << EOF
       {
         "rule_set": ["geosite-netflix"],
         "server": "$default_server",
@@ -3175,6 +3157,10 @@ EOF
         "server": "$default_server",
         "strategy": "ipv6_only"
       },
+EOF
+    fi
+
+    cat >> /etc/sing-box/config.json << EOF
       {
         "rule_set": ["geoip-cn", "geosite-cn"],
         "server": "dns_local",
@@ -3268,10 +3254,6 @@ EOF
     {
       "type": "direct",
       "tag": "direct"
-    },
-    {
-      "type": "block",
-      "tag": "block"
     }
   ],
   "experimental": {
